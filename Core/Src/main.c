@@ -31,17 +31,17 @@
 // TAKE ID 0x555 byte 2 (3 for apps2) divide by 255 * 3.3 to convert to voltage
 //Change FAULT LOW and FAULT high to prevent shutoffs
 
-#define TPS1_0PER 1.278
-#define TPS1_100PER 2.25
+#define TPS1_0PER 1.41
+#define TPS1_100PER 2.47
 
-#define TPS1_FAULT_LOW 1.25
-#define TPS1_FAULT_HIGH 2.30
+#define TPS1_FAULT_LOW 1.37
+#define TPS1_FAULT_HIGH 2.5
 
-#define TPS2_0PER 1.16
-#define TPS2_100PER 1.79
+#define TPS2_0PER 1.31
+#define TPS2_100PER 1.87
 
-#define TPS2_FAULT_LOW 1.11
-#define TPS2_FAULT_HIGH 1.83
+#define TPS2_FAULT_LOW 1.28
+#define TPS2_FAULT_HIGH 1.91
 
 #define BPS_Setpoint 0.503
 
@@ -107,7 +107,8 @@ uint32_t torque_limit = 2200;
 uint32_t motor_speed = 0;
 uint32_t current_limit = 125;
 uint32_t bus_voltage = 396;
-uint8_t inverter_enabled = 1;
+uint8_t inverter_enabled = 0;
+uint8_t inverter_lockout = 1;
 uint8_t can_ready = 0;
 uint8_t print_ready = 0;
 uint8_t ready_to_drive = 0;
@@ -125,8 +126,10 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan) {
 
 	if (RxHeader.StdId == 0x0B1) {
 		//torque_limit = RxData[1] << 8 | RxData[0];
-	} else if (RxHeader.StdId == 0x0AA) {
-		inverter_enabled = RxData[6] & 1;
+	}
+	else if (RxHeader.StdId == 0x0AA) {
+		inverter_enabled = RxData[6] & 0x01;
+		inverter_lockout = RxData[6] & 0x80 >> 7;
 		if(inverter_enabled == 0 && inv_en_debounce < 10){
 			inv_en_debounce += 1;
 		}
@@ -422,13 +425,13 @@ int main(void)
     	  			}
 
     	  			if (can_ready) {
-    	  				if (!inverter_enabled && inv_en_debounce >= 10) {
+    	  				if (inverter_lockout) {
     	  					TxData[0] = torque_request & 0xFF;			// Torque Command lo
     	  					TxData[1] = torque_request >> 8 & 0xFF;		// Torque Command hi
     	  					TxData[2] = 0x00;							// Speed Command lo
     	  					TxData[3] = 0x00;							// Speed Command hi
     	  					TxData[4] = 0x01; // Direction: Reverse = 0x00 | Forward = 0x01;
-    	  					TxData[5] = 0x00 | 0x02 | (counter << 4);// 5[0] = Inv enable | 5[1] = Discharge enable
+    	  					TxData[5] = 0x00 | 0x00 | (counter << 4);// 5[0] = Inv enable | 5[1] = Discharge enable | counter
     	  					TxData[6] = 0x00;			// Torque limit lo, 0 = EEprom limit
     	  					TxData[7] = 0x00;			// Torque limit hi, 0 = EEprom limit
 
@@ -438,19 +441,18 @@ int main(void)
     	  					}
     	  					counter += 1;
     	  					counter = counter & 0x0F;
-
-    	  					inverter_enabled = 1;
     	  					inv_en_debounce = 0;
+    	  					can_ready = 0;
     	  					HAL_Delay(10);
     	  				}
-
+    	  			else{
     	  				TxData[0] = torque_request & 0xFF;				// Torque Command lo
     	  				TxData[1] = torque_request >> 8 & 0xFF;			// Torque Command hi
     	  				TxData[2] = 0x00;								// Speed Command lo
     	  				TxData[3] = 0x00;								// Speed Command hi
     	  				TxData[4] = 0x01; 	// Direction: Reverse = 0x00 | Forward = 0x01;
     	  				TxData[5] = (~should_disable_inverter & 0x1) | 0x02
-    	  						| (counter << 4); // 5[0] = Inv enable | 5[1] = Discharge enable
+    	  						| (counter << 4); // 5[0] = Inv enable | 5[1] = Discharge enable | counter
     	  				TxData[6] = 0x00;				// Torque limit lo, 0 = EEprom limit
     	  				TxData[7] = 0x00;				// Torque limit hi, 0 = EEprom limit
 
@@ -462,6 +464,7 @@ int main(void)
     	  				counter = counter & 0x0F;
     	  				can_ready = 0;
     	  			}
+    	  			}
 
     	  			if (print_ready) {
 
@@ -469,7 +472,7 @@ int main(void)
     	  				TxData[1] = (bps_adc >> 8) & 0xFF;
     	  				TxData[2] = (tps1_adc >> 4) & 0xFF;
     	  				TxData[3] = (tps2_adc >> 4) & 0xFF;
-    	  				TxData[4] = (tps_dist_error << 5) | (tps2_oor << 4) | (tps1_oor << 3) | (bps_error << 2) | (ready_to_drive << 1) | should_disable_inverter;
+    	  				TxData[4] = (inverter_lockout << 7) | (inverter_enabled << 6) | (tps_dist_error << 5) | (tps2_oor << 4) | (tps1_oor << 3) | (bps_error << 2) | (ready_to_drive << 1) | should_disable_inverter;
     	  				TxData[5] = (int) (tps1 * 100) & 0xff;
     	  				TxData[6] = (int) (tps2 * 100) & 0xff;
     	  				TxData[7] = (int) (tmap_lut(tps_combined) * 100) & 0xFF;
