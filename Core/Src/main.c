@@ -31,17 +31,17 @@
 // TAKE ID 0x555 byte 2 (3 for apps2) divide by 255 * 3.3 to convert to voltage
 //Change FAULT LOW and FAULT high to prevent shutoffs
 
-#define TPS1_0PER 1.41
-#define TPS1_100PER 2.47
+#define TPS1_0PER 1.65
+#define TPS1_100PER 2.31
 
-#define TPS1_FAULT_LOW 1.37
-#define TPS1_FAULT_HIGH 2.5
+#define TPS1_FAULT_LOW 1.0
+#define TPS1_FAULT_HIGH 2.82
 
-#define TPS2_0PER 1.31
-#define TPS2_100PER 1.87
+#define TPS2_0PER 1.33
+#define TPS2_100PER 1.68
 
-#define TPS2_FAULT_LOW 1.28
-#define TPS2_FAULT_HIGH 1.91
+#define TPS2_FAULT_LOW 0.5
+#define TPS2_FAULT_HIGH 2.06
 
 #define BPS_Setpoint 0.503
 
@@ -107,8 +107,8 @@ uint32_t torque_limit = 2200;
 uint32_t motor_speed = 0;
 uint32_t current_limit = 125;
 uint32_t bus_voltage = 396;
-uint8_t inverter_enabled = 0;
-uint8_t inverter_lockout = 1;
+volatile uint8_t inverter_enabled = 0;
+volatile uint8_t inverter_lockout = 1;
 uint8_t can_ready = 0;
 uint8_t print_ready = 0;
 uint8_t ready_to_drive = 0;
@@ -116,6 +116,7 @@ uint8_t tps1_oor = 0;
 uint8_t tps2_oor = 0;
 uint8_t tps_dist_error = 0;
 uint8_t inv_en_debounce = 0;
+volatile uint8_t inv_message = 0;
 
 
 void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan) {
@@ -129,7 +130,8 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan) {
 	}
 	else if (RxHeader.StdId == 0x0AA) {
 		inverter_enabled = RxData[6] & 0x01;
-		inverter_lockout = RxData[6] & 0x80 >> 7;
+		inverter_lockout = (RxData[6] >> 7) & 0x01;
+		inv_message = RxData[6];
 		if(inverter_enabled == 0 && inv_en_debounce < 10){
 			inv_en_debounce += 1;
 		}
@@ -371,13 +373,20 @@ int main(void)
     	  			tps1 = (tps1_v - TPS1_0PER) / (TPS1_100PER - TPS1_0PER); // Percentage
     	  			tps2 = (tps2_v - TPS2_0PER) / (TPS2_100PER - TPS2_0PER); // Percentage
 
+    	  			if (tps1 < 0){
+    	  				tps1 = 0;
+    	  			}
+    	  			if (tps2 < 0){
+    	  				tps2 = 0;
+    	  			}
+
     	  			tps1_avg = (tps1_avg == 0) ? tps1 : tps1_avg * 0.99 + tps1 * 0.01;
     	  			tps2_avg = (tps2_avg == 0) ? tps2 : tps2_avg * 0.99 + tps2 * 0.01;
 
     	  			tps1 = tps1_avg;
     	  			tps2 = tps2_avg;
 
-    	  			if (fabs(tps1 - tps2) > 0.2) {
+    	  			if (fabs(tps1 - tps2) > 0.5) {
     	  				tps_dist_error = 1;
     	  				//should_disable_inverter = 1;
     	  				if(disable_debounce < ddb){
@@ -425,13 +434,13 @@ int main(void)
     	  			}
 
     	  			if (can_ready) {
-    	  				if (inverter_lockout) {
+    	  				if (inverter_lockout == 1) {
     	  					TxData[0] = torque_request & 0xFF;			// Torque Command lo
     	  					TxData[1] = torque_request >> 8 & 0xFF;		// Torque Command hi
     	  					TxData[2] = 0x00;							// Speed Command lo
     	  					TxData[3] = 0x00;							// Speed Command hi
     	  					TxData[4] = 0x01; // Direction: Reverse = 0x00 | Forward = 0x01;
-    	  					TxData[5] = 0x00 | 0x00 | (counter << 4);// 5[0] = Inv enable | 5[1] = Discharge enable | counter
+    	  					TxData[5] = 0x00 | 0x02 | (counter << 4);// 5[0] = Inv enable | 5[1] = Discharge enable | counter
     	  					TxData[6] = 0x00;			// Torque limit lo, 0 = EEprom limit
     	  					TxData[7] = 0x00;			// Torque limit hi, 0 = EEprom limit
 
@@ -451,7 +460,7 @@ int main(void)
     	  				TxData[2] = 0x00;								// Speed Command lo
     	  				TxData[3] = 0x00;								// Speed Command hi
     	  				TxData[4] = 0x01; 	// Direction: Reverse = 0x00 | Forward = 0x01;
-    	  				TxData[5] = (~should_disable_inverter & 0x1) | 0x02
+    	  				TxData[5] = (~should_disable_inverter & 0x01) | 0x02
     	  						| (counter << 4); // 5[0] = Inv enable | 5[1] = Discharge enable | counter
     	  				TxData[6] = 0x00;				// Torque limit lo, 0 = EEprom limit
     	  				TxData[7] = 0x00;				// Torque limit hi, 0 = EEprom limit
@@ -468,8 +477,8 @@ int main(void)
 
     	  			if (print_ready) {
 
-    	  				TxData[0] = (bps_adc) & 0xFF;
-    	  				TxData[1] = (bps_adc >> 8) & 0xFF;
+    	  				TxData[0] = inv_message & 0xFF;
+    	  				TxData[1] = (bps_adc >> 4) & 0xFF;
     	  				TxData[2] = (tps1_adc >> 4) & 0xFF;
     	  				TxData[3] = (tps2_adc >> 4) & 0xFF;
     	  				TxData[4] = (inverter_lockout << 7) | (inverter_enabled << 6) | (tps_dist_error << 5) | (tps2_oor << 4) | (tps1_oor << 3) | (bps_error << 2) | (ready_to_drive << 1) | should_disable_inverter;
@@ -859,8 +868,8 @@ static void MX_USB_PCD_Init(void)
 static void MX_GPIO_Init(void)
 {
   GPIO_InitTypeDef GPIO_InitStruct = {0};
-/* USER CODE BEGIN MX_GPIO_Init_1 */
-/* USER CODE END MX_GPIO_Init_1 */
+  /* USER CODE BEGIN MX_GPIO_Init_1 */
+  /* USER CODE END MX_GPIO_Init_1 */
 
   /* GPIO Ports Clock Enable */
   __HAL_RCC_GPIOD_CLK_ENABLE();
@@ -884,8 +893,8 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-/* USER CODE BEGIN MX_GPIO_Init_2 */
-/* USER CODE END MX_GPIO_Init_2 */
+  /* USER CODE BEGIN MX_GPIO_Init_2 */
+  /* USER CODE END MX_GPIO_Init_2 */
 }
 
 /* USER CODE BEGIN 4 */
