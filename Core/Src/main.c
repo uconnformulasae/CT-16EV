@@ -31,20 +31,23 @@
 // TAKE ID 0x555 byte 2 (3 for apps2) divide by 255 * 3.3 to convert to voltage
 //Change FAULT LOW and FAULT high to prevent shutoffs
 
-#define TPS1_0PER 1.65
-#define TPS1_100PER 2.31
+#define TPS1_0PER 1.4
+#define TPS1_100PER 2.3
 
-#define TPS1_FAULT_LOW 1.0
-#define TPS1_FAULT_HIGH 2.82
+#define TPS1_FAULT_LOW 0.2
+#define TPS1_FAULT_HIGH 2.8
 
-#define TPS2_0PER 1.33
-#define TPS2_100PER 1.68
+#define TPS2_0PER 0.63
+#define TPS2_100PER 1.55
 
-#define TPS2_FAULT_LOW 0.5
-#define TPS2_FAULT_HIGH 2.06
+#define TPS2_FAULT_LOW 0.2
+#define TPS2_FAULT_HIGH 1.7
 
-#define BPS_Setpoint 0.503
+#define BPS_Setpoint 0.765
 
+#define APPS_TRIP_PERCENT 0.1
+
+#define TPS_IIR_RATIO 0.
 
 #define ADC_TPS1	&hadc1
 #define ADC_TPS2    &hadc2
@@ -111,12 +114,16 @@ volatile uint8_t inverter_enabled = 0;
 volatile uint8_t inverter_lockout = 1;
 uint8_t can_ready = 0;
 uint8_t print_ready = 0;
-uint8_t ready_to_drive = 0;
+volatile uint8_t ready_to_drive = 0;
 uint8_t tps1_oor = 0;
 uint8_t tps2_oor = 0;
 uint8_t tps_dist_error = 0;
-uint8_t inv_en_debounce = 0;
+volatile uint16_t rtd_timeout = 199;
 volatile uint8_t inv_message = 0;
+volatile uint8_t rtd_buzzer_counter = 0;
+volatile uint8_t start_disable_debounce = 1;
+volatile uint16_t disable_debounce = 999;
+
 
 
 void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan) {
@@ -131,9 +138,10 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan) {
 	else if (RxHeader.StdId == 0x0AA) {
 		inverter_enabled = RxData[6] & 0x01;
 		inverter_lockout = (RxData[6] >> 7) & 0x01;
+		uint8_t ready_pin_state = (RxData[3] >> 1) & 0x01;
 		inv_message = RxData[6];
-		if(inverter_enabled == 0 && inv_en_debounce < 10){
-			inv_en_debounce += 1;
+		if(ready_pin_state){
+			rtd_timeout = 0;
 		}
 	}
 	else if (RxHeader.StdId == 0x0A5){
@@ -146,13 +154,27 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan) {
 			bus_voltage = (RxData[5] << 8 | RxData[4]);
 		}
 
+
 }
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 	if (htim->Instance == TIM2) {
 		can_ready = 1;
-	} else if (htim->Instance == TIM3) {
+		if(start_disable_debounce){
+			disable_debounce += 1;
+			disable_debounce = fmin(disable_debounce, 100);
+		}
+		else{
+			disable_debounce = 0;
+		}
+	}
+	else if (htim->Instance == TIM3) {
 		print_ready = 1;
+		if(ready_to_drive && rtd_buzzer_counter < 100){
+			rtd_buzzer_counter += 1;
+		}
+		rtd_timeout += 1;
+		rtd_timeout = fmin(rtd_timeout, 200);
 	}
 }
 
@@ -308,13 +330,17 @@ int main(void)
     	  		rtdHeader.DLC = 1;
 
 
-    	  		double tps1;
-    	  		double tps2;
-    	  		double tps_combined;
-    	  		uint32_t torque_request;
-    	  		uint8_t counter = 0;
-    	  		uint32_t tps1_adc;
-    	  		uint32_t tps2_adc;
+    	  		double tps1 = 0;
+    	  		double tps2 = 0;
+    	  		double tps_combined = 0;
+    	  		double bps = 0;
+    	  		uint32_t torque_request = 0;
+    	  		uint8_t heartbeat_counter = 0;
+    	  		uint32_t tps1_adc = 0;
+    	  		uint32_t tps2_adc = 0;
+    	  		uint32_t bps_adc = 0;
+    	  		uint8_t brake_pressed = 0;
+    	  		uint8_t bse_error = 0;
     	  		uint8_t should_disable_inverter = 0;
 
     	  		HAL_TIM_Base_Start_IT(&htim2);
@@ -323,124 +349,110 @@ int main(void)
     	  		double tps1_avg = 0;
     	  		double tps2_avg = 0;
 
-    	  		uint8_t disable_debounce = 0;
-    	  		uint8_t all_clear = 0;
+    	  		int32_t rtd_debounce = 0;
+    	  		uint8_t rtd_raw = 0;
     	  		while (1) {
-    	  			all_clear = 1;
 
     	  			HAL_ADC_Start(ADC_BPS);
     	  			HAL_ADC_Start(ADC_TPS1);
     	  			HAL_ADC_Start(ADC_TPS2);
+    	  			
+    	  			HAL_CAN_AbortTxRequest(&hcan, CAN_TX_MAILBOX0 | CAN_TX_MAILBOX1 | CAN_TX_MAILBOX2);
 
-    	  			tps1_oor = 0;
-    	  			tps2_oor = 0;
-    	  			tps_dist_error = 0;
-
-    	  			//if(HAL_CAN_GetTxMailboxesFreeLevel(&hcan) <= 1){
-    	  				HAL_CAN_AbortTxRequest(&hcan, CAN_TX_MAILBOX0 | CAN_TX_MAILBOX1 | CAN_TX_MAILBOX2);
-    	  			//}
-
-
-    	  			ready_to_drive = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_2);
-
+    	  			// Throttle Position Potentiometer 1 Acquire and Calculate
     	  			HAL_ADC_PollForConversion(ADC_TPS1, HAL_MAX_DELAY);
     	  			tps1_adc = HAL_ADC_GetValue(ADC_TPS1);
+    	  			double tps1_v = ((double) tps1_adc) / 4095 * 3.3;
+    	  			tps1 = (tps1_v - TPS1_0PER) / (TPS1_100PER - TPS1_0PER); // Percentage
+    	  			tps1 = fmax(tps1, 0);
+    	  			tps1_avg = (tps1_avg == 0) ? tps1 : tps1_avg * TPS_IIR_RATIO + tps1 * (1 - TPS_IIR_RATIO);
+    	  			tps1 = tps1_avg;
+    	  			
 
+    	  			// Throttle Position Potentiometer 2 Acquire and Calculate
     	  			HAL_ADC_PollForConversion(ADC_TPS2, HAL_MAX_DELAY);
     	  			tps2_adc = HAL_ADC_GetValue(ADC_TPS2);
-
-    	  			double tps1_v = ((double) tps1_adc) / 4095 * 3.3;
     	  			double tps2_v = ((double) tps2_adc) / 4095 * 3.3;
-
-    	  			if (tps1_v < TPS1_FAULT_LOW || tps1_v > TPS1_FAULT_HIGH) {
-    	  				//should_disable_inverter = 1;
-    	  				tps1_oor = 1;
-    	  				if(disable_debounce < ddb){
-    	  					disable_debounce += 1;
-    	  				}
-    	  				all_clear = 0;
-    	  			}
-
-    	  			if (tps2_v < TPS2_FAULT_LOW || tps2_v > TPS2_FAULT_HIGH) {
-    	  				//should_disable_inverter = 1;
-    	  				tps2_oor = 1;
-    	  				if(disable_debounce < ddb){
-    	  					disable_debounce += 1;
-    	  				}
-    	  				all_clear = 0;
-    	  			}
-
-    	  			tps1 = (tps1_v - TPS1_0PER) / (TPS1_100PER - TPS1_0PER); // Percentage
     	  			tps2 = (tps2_v - TPS2_0PER) / (TPS2_100PER - TPS2_0PER); // Percentage
-
-    	  			if (tps1 < 0){
-    	  				tps1 = 0;
-    	  			}
-    	  			if (tps2 < 0){
-    	  				tps2 = 0;
-    	  			}
-
-    	  			tps1_avg = (tps1_avg == 0) ? tps1 : tps1_avg * 0.99 + tps1 * 0.01;
-    	  			tps2_avg = (tps2_avg == 0) ? tps2 : tps2_avg * 0.99 + tps2 * 0.01;
-
-    	  			tps1 = tps1_avg;
+    	  			tps2 = fmax(tps2, 0);
+    	  			tps2_avg = (tps2_avg == 0) ? tps2 : tps2_avg * TPS_IIR_RATIO + tps2 * (1 - TPS_IIR_RATIO);
     	  			tps2 = tps2_avg;
-
-    	  			if (fabs(tps1 - tps2) > 0.5) {
-    	  				tps_dist_error = 1;
-    	  				//should_disable_inverter = 1;
-    	  				if(disable_debounce < ddb){
-    	  					disable_debounce += 1;
-    	  				}
-    	  				all_clear = 0;
-    	  			}
-
+    	  			
+    	  			// TPS and Torque request calculate
     	  			tps_combined = (tps1 + tps2) / 2;
-
     	  			torque_request = torque_lut(tmap_lut(tps_combined));
-
-    	  	//		if (ready_to_drive == 0) {
-    	  	//			//should_disable_inverter = 1;
-    	  	//			if(disable_debounce < ddb){
-    	  	//				disable_debounce += 1;
-    	  	//			}
-    	  	//			all_clear = 0;
-    	  	//		}
-
+    	  			
+    	  			// Brake Pressure Acquire and Calculate
     	  			HAL_ADC_PollForConversion(ADC_BPS, HAL_MAX_DELAY);
-    	  			int bps_adc = HAL_ADC_GetValue(ADC_BPS);
-    	  			float bps = ((double) bps_adc) / 4095 * 5;
-    	  			uint8_t bps_error = bps > BPS_Setpoint && tps_combined >= 0.1? 1 : 0;
+    	  			bps_adc = HAL_ADC_GetValue(ADC_BPS);
+    	  			bps = ((double) bps_adc) / 4095 * 5;
+    	  			brake_pressed = bps > BPS_Setpoint;
+    	  			
+    	  			// Ready to Drive button poll
+    	  			rtd_raw = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_5);
+    	  			rtd_raw &= brake_pressed;
+    	  			
+    	  			if (rtd_raw){
+						rtd_debounce += 3;
+					}
+					else {
+						rtd_debounce -= 4;
+					}
+    	  			
+    	  			rtd_debounce = fmin(fmax(rtd_debounce, 0), 100);
 
-    	  			if(bps_error == 1){
-    	  				//should_disable_inverter = 1;
-    	  				if(disable_debounce < ddb){
-    	  					disable_debounce += 1;
-    	  				}
-    	  				all_clear = 0;
+    	  			if (rtd_debounce > 50){
+    	  				ready_to_drive = 1;
     	  			}
 
-    	  			if(all_clear == 1){
-    	  				disable_debounce = 0;
-    	  				should_disable_inverter = 0;
+    	  			ready_to_drive &= rtd_timeout < 20;
+
+    	  			// Ready to Drive dashboard light
+    	  			HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, ready_to_drive);
+
+    	  			// Ready to drive Buzzer
+    	  			if (ready_to_drive == 0) {
+    	  				rtd_buzzer_counter = 0;
+    	  			}
+    	  			else {
+						if(rtd_buzzer_counter < 25){
+							HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+						}
+						else{
+							HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+						}
+    	  			}
+    	  			
+    	  			// Error States
+					tps1_oor = tps1_v < TPS1_FAULT_LOW || tps1_v > TPS1_FAULT_HIGH;
+					tps2_oor = tps2_v < TPS2_FAULT_LOW || tps2_v > TPS2_FAULT_HIGH;
+					tps1 = fmin(tps1, 100);
+					tps2 = fmin(tps2, 100);
+    	  			tps_dist_error = fabs(tps1 - tps2) > APPS_TRIP_PERCENT;
+
+    	  			if(!bse_error){
+    	  				bse_error = brake_pressed && tps_combined >= 0.1;
+    	  			}
+    	  			else{
+    	  				bse_error = tps_combined >= 0.05;
     	  			}
 
-    	  			if(disable_debounce >= ddb){
-    	  				should_disable_inverter = 1;
-    	  			}
+    	  			// Disable Inverter if any errors present
+    	  			start_disable_debounce = tps1_oor || tps2_oor || tps_dist_error || bse_error;
+    	  			should_disable_inverter = (disable_debounce > 5) || !ready_to_drive;
 
     	  			if (should_disable_inverter) {
     	  				torque_request = 0;
     	  			}
 
-    	  			if (can_ready) {
+    	  			if (can_ready) {	// Every ~10 (?) ms
     	  				if (inverter_lockout == 1) {
     	  					TxData[0] = torque_request & 0xFF;			// Torque Command lo
     	  					TxData[1] = torque_request >> 8 & 0xFF;		// Torque Command hi
     	  					TxData[2] = 0x00;							// Speed Command lo
     	  					TxData[3] = 0x00;							// Speed Command hi
     	  					TxData[4] = 0x01; // Direction: Reverse = 0x00 | Forward = 0x01;
-    	  					TxData[5] = 0x00 | 0x02 | (counter << 4);// 5[0] = Inv enable | 5[1] = Discharge enable | counter
+    	  					TxData[5] = 0x00 | 0x02 | (heartbeat_counter << 4);// 5[0] = Inv enable | 5[1] = Discharge enable | counter
     	  					TxData[6] = 0x00;			// Torque limit lo, 0 = EEprom limit
     	  					TxData[7] = 0x00;			// Torque limit hi, 0 = EEprom limit
 
@@ -448,9 +460,8 @@ int main(void)
     	  							!= HAL_OK) {
     	  						Error_Handler();
     	  					}
-    	  					counter += 1;
-    	  					counter = counter & 0x0F;
-    	  					inv_en_debounce = 0;
+    	  					heartbeat_counter += 1;
+    	  					heartbeat_counter = heartbeat_counter & 0x0F;
     	  					can_ready = 0;
     	  					HAL_Delay(10);
     	  				}
@@ -460,8 +471,7 @@ int main(void)
     	  				TxData[2] = 0x00;								// Speed Command lo
     	  				TxData[3] = 0x00;								// Speed Command hi
     	  				TxData[4] = 0x01; 	// Direction: Reverse = 0x00 | Forward = 0x01;
-    	  				TxData[5] = (~should_disable_inverter & 0x01) | 0x02
-    	  						| (counter << 4); // 5[0] = Inv enable | 5[1] = Discharge enable | counter
+    	  				TxData[5] = (~should_disable_inverter & 0x01) | 0x02 | (heartbeat_counter << 4); // 5[0] = Inv enable | 5[1] = Discharge enable | counter
     	  				TxData[6] = 0x00;				// Torque limit lo, 0 = EEprom limit
     	  				TxData[7] = 0x00;				// Torque limit hi, 0 = EEprom limit
 
@@ -469,19 +479,18 @@ int main(void)
     	  						!= HAL_OK) {
     	  					Error_Handler();
     	  				}
-    	  				counter += 1;
-    	  				counter = counter & 0x0F;
+    	  				heartbeat_counter += 1;
+    	  				heartbeat_counter = heartbeat_counter & 0x0F;
     	  				can_ready = 0;
     	  			}
     	  			}
 
-    	  			if (print_ready) {
-
-    	  				TxData[0] = inv_message & 0xFF;
+    	  			if (print_ready) {	// Every ~100(?) ms
+    	  				TxData[0] = rtd_timeout & 0xFF;
     	  				TxData[1] = (bps_adc >> 4) & 0xFF;
     	  				TxData[2] = (tps1_adc >> 4) & 0xFF;
     	  				TxData[3] = (tps2_adc >> 4) & 0xFF;
-    	  				TxData[4] = (inverter_lockout << 7) | (inverter_enabled << 6) | (tps_dist_error << 5) | (tps2_oor << 4) | (tps1_oor << 3) | (bps_error << 2) | (ready_to_drive << 1) | should_disable_inverter;
+    	  				TxData[4] = (inverter_lockout << 7) | (inverter_enabled << 6) | (tps_dist_error << 5) | (tps2_oor << 4) | (tps1_oor << 3) | (bse_error << 2) | (!ready_to_drive << 1) | should_disable_inverter;
     	  				TxData[5] = (int) (tps1 * 100) & 0xff;
     	  				TxData[6] = (int) (tps2 * 100) & 0xff;
     	  				TxData[7] = (int) (tmap_lut(tps_combined) * 100) & 0xFF;
@@ -490,7 +499,6 @@ int main(void)
     	  						!= HAL_OK) {
     	  					Error_Handler();
     	  				}
-
     	  				TxData[0] = (ready_to_drive) & 0x01;
 
     	  				if (HAL_CAN_AddTxMessage(&hcan, &rtdHeader, TxData, &TxMailbox)
@@ -760,7 +768,7 @@ static void MX_TIM2_Init(void)
   htim2.Instance = TIM2;
   htim2.Init.Prescaler = 21;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 59999;
+  htim2.Init.Period = 8000;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
@@ -803,7 +811,7 @@ static void MX_TIM3_Init(void)
 
   /* USER CODE END TIM3_Init 1 */
   htim3.Instance = TIM3;
-  htim3.Init.Prescaler = 999;
+  htim3.Init.Prescaler = 99;
   htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim3.Init.Period = 14399;
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
@@ -880,8 +888,15 @@ static void MX_GPIO_Init(void)
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0|GPIO_PIN_1|GPIO_PIN_2, GPIO_PIN_RESET);
 
-  /*Configure GPIO pins : PB0 PB1 PB2 */
-  GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1|GPIO_PIN_2;
+  /*Configure GPIO pin : PB0 */
+  GPIO_InitStruct.Pin = GPIO_PIN_0;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : PB1 PB2 */
+  GPIO_InitStruct.Pin = GPIO_PIN_1|GPIO_PIN_2;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
