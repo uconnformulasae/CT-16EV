@@ -1,0 +1,17 @@
+14:40:34 **** Incremental Build of configuration Debug for project LVCU-2024-25-Testing ****
+make -j11 all 
+arm-none-eabi-gcc "../Core/Src/main.c" -mcpu=cortex-m3 -std=gnu11 -g3 -DDEBUG -DUSE_HAL_DRIVER -DSTM32F103xE -c -I../Core/Inc -I../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy -I../Drivers/STM32F1xx_HAL_Driver/Inc -I../Drivers/CMSIS/Device/ST/STM32F1xx/Include -I../Drivers/CMSIS/Include -O0 -ffunction-sections -fdata-sections -Wall -fstack-usage -fcyclomatic-complexity -MMD -MP -MF"Core/Src/main.d" -MT"Core/Src/main.o" --specs=nano.specs -mfloat-abi=soft -mthumb -o "Core/Src/main.o"
+arm-none-eabi-gcc -o "LVCU-2024-25-Testing.elf" @"objects.list"   -mcpu=cortex-m3 -T"/Users/manthan/Desktop/LVCU-2024-25-Testing/STM32F103RCTX_FLASH.ld" --specs=nosys.specs -Wl,-Map="LVCU-2024-25-Testing.map" -Wl,--gc-sections -static --specs=nano.specs -mfloat-abi=soft -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
+Finished building target: LVCU-2024-25-Testing.elf
+ 
+arm-none-eabi-size  LVCU-2024-25-Testing.elf 
+arm-none-eabi-objdump -h -S LVCU-2024-25-Testing.elf  > "LVCU-2024-25-Testing.list"
+   text	   data	    bss	    dec	    hex	filename
+  33788	     32	   2680	  36500	   8e94	LVCU-2024-25-Testing.elf
+Finished building: default.size.stdout
+ 
+Finished building: LVCU-2024-25-Testing.list
+ 
+
+14:40:35 Build Finished. 0 errors, 0 warnings. (took 792ms)
+
