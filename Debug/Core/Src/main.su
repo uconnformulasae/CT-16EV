@@ -2,7 +2,7 @@
 ../Core/Src/main.c:160:6:HAL_TIM_PeriodElapsedCallback	16	static
 ../Core/Src/main.c:181:8:tmap_lut	48	static
 ../Core/Src/main.c:188:5:torque_lut	40	static
-../Core/Src/main.c:206:5:main	272	static
+../Core/Src/main.c:206:5:main	264	static
 ../Core/Src/main.c:529:6:SystemClock_Config	96	static
 ../Core/Src/main.c:577:13:MX_ADC1_Init	24	static
 ../Core/Src/main.c:624:13:MX_ADC2_Init	24	static

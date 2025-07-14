@@ -1,0 +1,13 @@
+# STM32CubeIDE project settings and metadata
+.settings/
+Debug/
+*.o
+*.elf
+*.bin
+*.hex
+*.map
+*.list
+*.su
+*.swp
+.DS_Store
+Thumbs.db

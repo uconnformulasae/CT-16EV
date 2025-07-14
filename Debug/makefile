@@ -60,8 +60,8 @@ all: main-build
 main-build: LVCU-2024-25-Testing.elf secondary-outputs
 
 # Tool invocations
-LVCU-2024-25-Testing.elf LVCU-2024-25-Testing.map: $(OBJS) $(USER_OBJS) C:\Users\Ryan\ School\OneDrive\ -\ University\ of\ Connecticut\UConn\Formula\2025\LVCU\LVCU-2024-25-Testing\ (2)\LVCU-2024-25-Testing\STM32F103RCTX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-gcc -o "LVCU-2024-25-Testing.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m3 -T"C:\Users\Ryan School\OneDrive - University of Connecticut\UConn\Formula\2025\LVCU\LVCU-2024-25-Testing (2)\LVCU-2024-25-Testing\STM32F103RCTX_FLASH.ld" --specs=nosys.specs -Wl,-Map="LVCU-2024-25-Testing.map" -Wl,--gc-sections -static --specs=nano.specs -mfloat-abi=soft -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
+LVCU-2024-25-Testing.elf LVCU-2024-25-Testing.map: $(OBJS) $(USER_OBJS) /Users/manthan/Desktop/CT-16EV/STM32F103RCTX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
+	arm-none-eabi-gcc -o "LVCU-2024-25-Testing.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m3 -T"/Users/manthan/Desktop/CT-16EV/STM32F103RCTX_FLASH.ld" --specs=nosys.specs -Wl,-Map="LVCU-2024-25-Testing.map" -Wl,--gc-sections -static --specs=nano.specs -mfloat-abi=soft -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
 	@echo 'Finished building target: $@'
 	@echo ' '
 

@@ -8,7 +8,7 @@
  *
  * Copyright (c) 2024 STMicroelectronics.
  * All rights reserved.
- *
+ *d
  * This software is licensed under terms that can be found in the LICENSE file
  * in the root directory of this software component.
  * If no LICENSE file comes with this software, it is provided AS-IS.
@@ -35,13 +35,13 @@
 #define TPS1_100PER 2.3
 
 #define TPS1_FAULT_LOW 0.2
-#define TPS1_FAULT_HIGH 2.8
+#define TPS1_FAULT_HIGH 3.0
 
 #define TPS2_0PER 0.63
 #define TPS2_100PER 1.55
 
 #define TPS2_FAULT_LOW 0.2
-#define TPS2_FAULT_HIGH 1.7
+#define TPS2_FAULT_HIGH 3.0
 
 #define BPS_Setpoint 0.765
 
@@ -104,20 +104,20 @@ static void MX_ADC3_Init(void);
 /* USER CODE BEGIN 0 */
 CAN_RxHeaderTypeDef RxHeader;
 
-uint8_t RxData[8];
-uint8_t ddb = 10;
-uint32_t torque_limit = 2200;
-uint32_t motor_speed = 0;
-uint32_t current_limit = 125;
-uint32_t bus_voltage = 396;
+volatile uint8_t RxData[8];
+volatile uint8_t ddb = 10;
+volatile uint32_t torque_limit = 2200; //x10
+volatile uint32_t motor_speed = 0;
+volatile uint32_t current_limit = 125;
+volatile uint32_t bus_voltage = 396;
 volatile uint8_t inverter_enabled = 0;
 volatile uint8_t inverter_lockout = 1;
-uint8_t can_ready = 0;
-uint8_t print_ready = 0;
+volatile uint8_t can_ready = 0;
+volatile uint8_t print_ready = 0;
 volatile uint8_t ready_to_drive = 0;
-uint8_t tps1_oor = 0;
-uint8_t tps2_oor = 0;
-uint8_t tps_dist_error = 0;
+volatile uint8_t tps1_oor = 0;
+volatile uint8_t tps2_oor = 0;
+volatile uint8_t tps_dist_error = 0;
 volatile uint16_t rtd_timeout = 199;
 volatile uint8_t inv_message = 0;
 volatile uint8_t rtd_buzzer_counter = 0;
