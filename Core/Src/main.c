@@ -62,7 +62,28 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+// --- LAUNCH CONTROL CONFIGURATION ---
+#define LAUNCH_CONTROL_ENABLE 1 // Set to 1 to enable, 0 to disable
 
+#if LAUNCH_CONTROL_ENABLE
+// --- Tunable Parameters ---
+#define LC_ACTIVATION_TPS_THRESHOLD 0.95  // Min throttle % to activate LC
+#define LC_DEACTIVATION_SPEED_KPH 40.0    // Speed at which LC disengages
+#define LC_TARGET_SLIP_RATIO 0.15         // Target slip ratio (15%)
+#define LC_KP 80.0                        // Proportional gain for PI controller
+#define LC_KI 40.0                        // Integral gain for PI controller
+#define LC_INTEGRAL_WINDUP_GUARD 1000.0   // Anti-windup for the integral term
+
+// --- Vehicle/Sensor Parameters ---
+#define FRONT_WHEEL_DIAMETER_M 0.4572     // 18-inch wheel diameter in meters
+#define FRONT_WHEEL_PULSES_PER_REV 48.0   // Pulses per revolution for the front wheel speed sensor
+#define REAR_WHEEL_DIAMETER_M 0.4572      // 18-inch wheel diameter in meters
+#define VEHICLE_GEAR_RATIO 3.8            // Motor to wheel gear ratio
+
+// --- Internal Defines ---
+#define LC_ACTIVATION_SPEED_KPH 1.0       // Max speed to be considered "stationary" for activation
+#define PI (3.14159265359f)
+#endif
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -79,11 +100,30 @@ CAN_HandleTypeDef hcan;
 
 TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim3;
+#if LAUNCH_CONTROL_ENABLE
+TIM_HandleTypeDef htim4;
+#endif
 
 PCD_HandleTypeDef hpcd_USB_FS;
 
 /* USER CODE BEGIN PV */
+#if LAUNCH_CONTROL_ENABLE
+// Launch Control State Variables
+volatile float front_wheel_speed_kph = 0.0f;
+volatile float rear_wheel_speed_kph = 0.0f;
+volatile float wheel_slip_ratio = 0.0f;
+volatile uint32_t last_pulse_time = 0;
+volatile uint8_t first_pulse_captured = 0;
 
+enum {
+    LC_STATE_IDLE,
+    LC_STATE_ACTIVE,
+    LC_STATE_COOLDOWN
+};
+volatile uint8_t launch_control_state = LC_STATE_IDLE;
+float lc_integral_term = 0.0f;
+uint32_t launch_control_torque_limit = 0;
+#endif
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -97,11 +137,57 @@ static void MX_TIM3_Init(void);
 static void MX_ADC2_Init(void);
 static void MX_ADC3_Init(void);
 /* USER CODE BEGIN PFP */
-
+#if LAUNCH_CONTROL_ENABLE
+static void MX_TIM4_Init(void);
+#endif
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+#if LAUNCH_CONTROL_ENABLE
+void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
+{
+    if (htim->Instance == TIM4 && htim->Channel == HAL_TIM_ACTIVE_CHANNEL_3)
+    {
+        if (!first_pulse_captured)
+        {
+            // For the very first pulse, just record the time and wait for the next one.
+            last_pulse_time = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_3);
+            first_pulse_captured = 1;
+            return;
+        }
+
+        uint32_t current_pulse_time = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_3);
+        uint32_t pulse_period_ticks;
+
+        if (current_pulse_time > last_pulse_time)
+        {
+            pulse_period_ticks = current_pulse_time - last_pulse_time;
+        }
+        else
+        {
+            // Timer overflowed between pulses
+            pulse_period_ticks = (htim->Init.Period - last_pulse_time) + current_pulse_time;
+        }
+        last_pulse_time = current_pulse_time;
+
+        if (pulse_period_ticks > 0)
+        {
+            // TIM4 is clocked from APB1, which is 24MHz.
+            // The prescaler for TIM4 is set to 23, so the timer clock is 1 MHz.
+            float pulse_frequency = 1000000.0f / pulse_period_ticks; // Timer Freq / Ticks
+            float wheel_rpm = (pulse_frequency / FRONT_WHEEL_PULSES_PER_REV) * 60.0f;
+            float wheel_speed_mps = (wheel_rpm / 60.0f) * PI * FRONT_WHEEL_DIAMETER_M;
+            front_wheel_speed_kph = wheel_speed_mps * 3.6f;
+        }
+        else
+        {
+            front_wheel_speed_kph = 0.0f;
+        }
+    }
+}
+#endif
+
 CAN_RxHeaderTypeDef RxHeader;
 
 volatile uint8_t RxData[8];
@@ -239,6 +325,9 @@ int main(void)
   MX_ADC2_Init();
   MX_ADC3_Init();
   /* USER CODE BEGIN 2 */
+#if LAUNCH_CONTROL_ENABLE
+  MX_TIM4_Init();
+#endif
   CAN_TxHeaderTypeDef TxHeader;
     	CAN_TxHeaderTypeDef debugHeader;
     	CAN_TxHeaderTypeDef rtdHeader;
@@ -309,6 +398,10 @@ int main(void)
     		Error_Handler();
     	}
 
+#if LAUNCH_CONTROL_ENABLE
+    	// Start the input capture for front wheel speed sensor on pin PB8 (TIM4_CH3)
+    	HAL_TIM_IC_Start_IT(&htim4, TIM_CHANNEL_3);
+#endif
 
   /* USER CODE END 2 */
 
@@ -393,11 +486,11 @@ int main(void)
     	  			rtd_raw &= brake_pressed;
     	  			
     	  			if (rtd_raw){
-						rtd_debounce += 3;
-					}
-					else {
-						rtd_debounce -= 4;
-					}
+				rtd_debounce += 3;
+				}
+				else {
+					rtd_debounce -= 4;
+				}
     	  			
     	  			rtd_debounce = fmin(fmax(rtd_debounce, 0), 100);
 
@@ -415,19 +508,19 @@ int main(void)
     	  				rtd_buzzer_counter = 0;
     	  			}
     	  			else {
-						if(rtd_buzzer_counter < 25){
-							HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
-						}
-						else{
-							HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
-						}
+				if(rtd_buzzer_counter < 25){
+					HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+				}
+				else{
+					HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+				}
     	  			}
     	  			
     	  			// Error States
-					tps1_oor = tps1_v < TPS1_FAULT_LOW || tps1_v > TPS1_FAULT_HIGH;
-					tps2_oor = tps2_v < TPS2_FAULT_LOW || tps2_v > TPS2_FAULT_HIGH;
-					tps1 = fmin(tps1, 100);
-					tps2 = fmin(tps2, 100);
+				tps1_oor = tps1_v < TPS1_FAULT_LOW || tps1_v > TPS1_FAULT_HIGH;
+				tps2_oor = tps2_v < TPS2_FAULT_LOW || tps2_v > TPS2_FAULT_HIGH;
+				tps1 = fmin(tps1, 100);
+				tps2 = fmin(tps2, 100);
     	  			tps_dist_error = fabs(tps1 - tps2) > APPS_TRIP_PERCENT;
 
     	  			if(!bse_error){
@@ -440,6 +533,70 @@ int main(void)
     	  			// Disable Inverter if any errors present
     	  			start_disable_debounce = tps1_oor || tps2_oor || tps_dist_error || bse_error;
     	  			should_disable_inverter = (disable_debounce > 5) || !ready_to_drive;
+
+#if LAUNCH_CONTROL_ENABLE
+                // --- LAUNCH CONTROL LOGIC ---
+
+                // 1. Calculate rear wheel speed from motor speed
+                float rear_motor_rpm = motor_speed; // Assuming motor_speed is in RPM
+                float rear_wheel_rpm = rear_motor_rpm / VEHICLE_GEAR_RATIO;
+                float rear_wheel_speed_mps = (rear_wheel_rpm / 60.0f) * PI * REAR_WHEEL_DIAMETER_M;
+                rear_wheel_speed_kph = rear_wheel_speed_mps * 3.6f;
+
+                // 2. Determine Launch Control State
+                uint8_t can_activate_lc = !brake_pressed && (tps_combined > LC_ACTIVATION_TPS_THRESHOLD) && (front_wheel_speed_kph < LC_ACTIVATION_SPEED_KPH);
+
+                switch (launch_control_state) {
+                    case LC_STATE_IDLE:
+                        if (can_activate_lc && ready_to_drive && !should_disable_inverter) {
+                            launch_control_state = LC_STATE_ACTIVE;
+                            lc_integral_term = 0; // Reset integral term on activation
+                        }
+                        break;
+
+                    case LC_STATE_ACTIVE:
+                        // Deactivation conditions
+                        if (!ready_to_drive || should_disable_inverter || (tps_combined < LC_ACTIVATION_TPS_THRESHOLD) || (front_wheel_speed_kph > LC_DEACTIVATION_SPEED_KPH)) {
+                            launch_control_state = LC_STATE_COOLDOWN;
+                        }
+                        break;
+
+                    case LC_STATE_COOLDown:
+                        // Stay in cooldown until vehicle is stopped and throttle is released, preventing re-activation
+                        if (front_wheel_speed_kph < LC_ACTIVATION_SPEED_KPH && tps_combined < 0.05) {
+                            launch_control_state = LC_STATE_IDLE;
+                        }
+                        break;
+                }
+
+                // 3. Calculate Torque Limit if LC is Active
+                if (launch_control_state == LC_STATE_ACTIVE) {
+                    // Calculate wheel slip. Add a small epsilon to front speed to avoid division by zero when stationary.
+                    float front_speed_safe = fmaxf(front_wheel_speed_kph, 0.1f);
+                    wheel_slip_ratio = (rear_wheel_speed_kph - front_wheel_speed_kph) / front_speed_safe;
+                    wheel_slip_ratio = fmaxf(0.0f, wheel_slip_ratio); // Slip cannot be negative
+
+                    // PI Controller for slip regulation
+                    float error = LC_TARGET_SLIP_RATIO - wheel_slip_ratio;
+
+                    // Integral term with anti-windup
+                    lc_integral_term += error * LC_KI;
+                    if (lc_integral_term > LC_INTEGRAL_WINDUP_GUARD) lc_integral_term = LC_INTEGRAL_WINDUP_GUARD;
+                    if (lc_integral_term < -LC_INTEGRAL_WINDUP_GUARD) lc_integral_term = -LC_INTEGRAL_WINDUP_GUARD;
+
+                    // PI output.
+                    float pi_output = (error * LC_KP) + lc_integral_term;
+
+					// We calculate a torque limit based on the PI controller output.
+					// This limit is subtracted from the maximum possible torque.
+					launch_control_torque_limit = torque_lut(1.0) - pi_output;
+					launch_control_torque_limit = fmax(0, fmin(torque_limit, launch_control_torque_limit));
+
+
+                    // IMPORTANT: The LC torque limit can only REDUCE the driver's requested torque.
+                    torque_request = fmin(torque_request, launch_control_torque_limit);
+                }
+#endif
 
     	  			if (should_disable_inverter) {
     	  				torque_request = 0;
@@ -913,7 +1070,86 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+#if LAUNCH_CONTROL_ENABLE
+/**
+  * @brief TIM4 Initialization Function
+  * @note  This function configures TIM4 to measure the frequency of an incoming signal on PB8 (TIM4_CH3).
+  *        It sets up the timer in Input Capture mode.
+  * @param None
+  * @retval None
+  */
+static void MX_TIM4_Init(void)
+{
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_IC_InitTypeDef sConfigIC = {0};
 
+  htim4.Instance = TIM4;
+  // SystemCoreClock is 24MHz. APB1 clock is 24MHz.
+  // Prescaler of 23 gives 1MHz timer clock (1us per tick).
+  htim4.Init.Prescaler = 23;
+  htim4.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim4.Init.Period = 65535; // Max period for 16-bit timer
+  htim4.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim4.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim4) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_IC_Init(&htim4) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim4, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  sConfigIC.ICPolarity = TIM_INPUTCHANNELPOLARITY_RISING;
+  sConfigIC.ICSelection = TIM_ICSELECTION_DIRECTTI;
+  sConfigIC.ICPrescaler = TIM_ICPSC_DIV1;
+  sConfigIC.ICFilter = 0;
+  if (HAL_TIM_IC_ConfigChannel(&htim4, &sConfigIC, TIM_CHANNEL_3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+/**
+* @brief TIM_IC MSP Initialization
+* This function configures the hardware resources required for TIM4 Input Capture:
+*     - TIM4 clock enable
+*     - GPIO pin configuration for TIM4_CH3 (PB8)
+* @param htim_ic: TIM_IC handle pointer
+* @retval None
+*/
+void HAL_TIM_IC_MspInit(TIM_HandleTypeDef* htim_ic)
+{
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+  if(htim_ic->Instance==TIM4)
+  {
+    /* Peripheral clock enable */
+    __HAL_RCC_TIM4_CLK_ENABLE();
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+
+    /**TIM4 GPIO Configuration
+    PB8     ------> TIM4_CH3
+    */
+    GPIO_InitStruct.Pin = GPIO_PIN_8;
+    GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+    // Set pull-up or pull-down based on your sensor's output stage.
+    // A pull-up is common for open-drain/collector sensors.
+    GPIO_InitStruct.Pull = GPIO_PULLUP;
+    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+    /* TIM4 interrupt Init */
+    HAL_NVIC_SetPriority(TIM4_IRQn, 0, 0);
+    HAL_NVIC_EnableIRQ(TIM4_IRQn);
+  }
+}
+#endif
 /* USER CODE END 4 */
 
 /**
