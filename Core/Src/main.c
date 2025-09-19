@@ -41,11 +41,11 @@
 #define TPS2_100PER 1.55
 
 #define TPS2_FAULT_LOW 0.2
-#define TPS2_FAULT_HIGH 1.7
+#define TPS2_FAULT_HIGH 2.8
 
 #define BPS_Setpoint 0.765
 
-#define APPS_TRIP_PERCENT 0.1
+#define APPS_TRIP_PERCENT 0.4
 
 #define TPS_IIR_RATIO 0.
 
@@ -106,9 +106,9 @@ CAN_RxHeaderTypeDef RxHeader;
 
 uint8_t RxData[8];
 uint8_t ddb = 10;
-uint32_t torque_limit = 2200;
+uint32_t torque_limit = 2200; //x10
 uint32_t motor_speed = 0;
-uint32_t current_limit = 125;
+volatile uint32_t current_limit = 125;
 uint32_t bus_voltage = 396;
 volatile uint8_t inverter_enabled = 0;
 volatile uint8_t inverter_lockout = 1;
@@ -438,7 +438,7 @@ int main(void)
     	  			}
 
     	  			// Disable Inverter if any errors present
-    	  			start_disable_debounce = tps1_oor || tps2_oor || tps_dist_error || bse_error;
+    	  			start_disable_debounce = tps1_oor || tps2_oor || tps_dist_error || bse_error || (torque_request < 5 && motor_speed < 500);
     	  			should_disable_inverter = (disable_debounce > 5) || !ready_to_drive;
 
     	  			if (should_disable_inverter) {
