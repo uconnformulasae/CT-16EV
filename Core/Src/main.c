@@ -314,7 +314,7 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-    	TxHeader.IDE = CAN_ID_STD;
+    			TxHeader.IDE = CAN_ID_STD;
     	  		TxHeader.StdId = 0x0C0;
     	  		TxHeader.RTR = CAN_RTR_DATA;
     	  		TxHeader.DLC = 8;
@@ -389,7 +389,7 @@ int main(void)
     	  			brake_pressed = bps > BPS_Setpoint;
     	  			
     	  			// Ready to Drive button poll
-    	  			rtd_raw = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_5);
+    	  			rtd_raw = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_14);
     	  			rtd_raw &= brake_pressed;
     	  			
     	  			if (rtd_raw){
@@ -405,8 +405,11 @@ int main(void)
     	  				ready_to_drive = 1;
     	  			}
 
-    	  			ready_to_drive &= rtd_timeout < 20;
+    	 		///////////////////UN COMMENT THIS PLZ///////////////////
 
+    	  		//	ready_to_drive &= rtd_timeout < 20;
+
+    	  		//////////////////////////////////////////////////////////
     	  			// Ready to Drive dashboard light
     	  			HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, ready_to_drive);
 
@@ -416,10 +419,10 @@ int main(void)
     	  			}
     	  			else {
 						if(rtd_buzzer_counter < 25){
-							HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+							HAL_GPIO_WritePin(GPIOB, GPIO_PIN_2, GPIO_PIN_SET);
 						}
 						else{
-							HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+							HAL_GPIO_WritePin(GPIOB, GPIO_PIN_2, GPIO_PIN_RESET);
 						}
     	  			}
     	  			
@@ -490,7 +493,7 @@ int main(void)
     	  				TxData[1] = (bps_adc >> 4) & 0xFF;
     	  				TxData[2] = (tps1_adc >> 4) & 0xFF;
     	  				TxData[3] = (tps2_adc >> 4) & 0xFF;
-    	  				TxData[4] = (inverter_lockout << 7) | (inverter_enabled << 6) | (tps_dist_error << 5) | (tps2_oor << 4) | (tps1_oor << 3) | (bse_error << 2) | (!ready_to_drive << 1) | should_disable_inverter;
+    	  				TxData[4] = (inverter_lockout << 7) | (inverter_enabled << 6) | (tps_dist_error << 5) | (tps2_oor << 4) | (tps1_oor << 3) | (brake_pressed << 2) | (ready_to_drive << 1) | should_disable_inverter;
     	  				TxData[5] = (int) (tps1 * 100) & 0xff;
     	  				TxData[6] = (int) (tps2 * 100) & 0xff;
     	  				TxData[7] = (int) (tmap_lut(tps_combined) * 100) & 0xFF;
@@ -902,10 +905,10 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PB4 PB5 PB6 */
-  GPIO_InitStruct.Pin = GPIO_PIN_4|GPIO_PIN_5|GPIO_PIN_6;
+  /*Configure GPIO pins : PB12 PB13 PB14 */
+  GPIO_InitStruct.Pin = GPIO_PIN_12|GPIO_PIN_13|GPIO_PIN_14;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
@@ -929,8 +932,7 @@ void Error_Handler(void)
 	}
   /* USER CODE END Error_Handler_Debug */
 }
-
-#ifdef  USE_FULL_ASSERT
+#ifdef USE_FULL_ASSERT
 /**
   * @brief  Reports the name of the source file and the source line number
   *         where the assert_param error has occurred.
