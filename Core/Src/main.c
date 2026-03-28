@@ -407,7 +407,7 @@ int main(void)
 
     	 		///////////////////UN COMMENT THIS PLZ///////////////////
 
-    	  		//	ready_to_drive &= rtd_timeout < 20;
+    	  			ready_to_drive &= rtd_timeout < 20;
 
     	  		//////////////////////////////////////////////////////////
     	  			// Ready to Drive dashboard light
@@ -454,7 +454,7 @@ int main(void)
     	  					TxData[1] = torque_request >> 8 & 0xFF;		// Torque Command hi
     	  					TxData[2] = 0x00;							// Speed Command lo
     	  					TxData[3] = 0x00;							// Speed Command hi
-    	  					TxData[4] = 0x01; // Direction: Reverse = 0x00 | Forward = 0x01;
+    	  					TxData[4] = 0x00; // Direction: Reverse = 0x00 | Forward = 0x01;
     	  					TxData[5] = 0x00 | 0x02 | (heartbeat_counter << 4);// 5[0] = Inv enable | 5[1] = Discharge enable | counter
     	  					TxData[6] = 0x00;			// Torque limit lo, 0 = EEprom limit
     	  					TxData[7] = 0x00;			// Torque limit hi, 0 = EEprom limit
@@ -473,7 +473,7 @@ int main(void)
     	  				TxData[1] = torque_request >> 8 & 0xFF;			// Torque Command hi
     	  				TxData[2] = 0x00;								// Speed Command lo
     	  				TxData[3] = 0x00;								// Speed Command hi
-    	  				TxData[4] = 0x01; 	// Direction: Reverse = 0x00 | Forward = 0x01;
+    	  				TxData[4] = 0x00; 	// Direction: Reverse = 0x00 | Forward = 0x01;
     	  				TxData[5] = (~should_disable_inverter & 0x01) | 0x02 | (heartbeat_counter << 4); // 5[0] = Inv enable | 5[1] = Discharge enable | counter
     	  				TxData[6] = 0x00;				// Torque limit lo, 0 = EEprom limit
     	  				TxData[7] = 0x00;				// Torque limit hi, 0 = EEprom limit
