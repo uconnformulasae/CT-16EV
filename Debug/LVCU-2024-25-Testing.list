@@ -35,17 +35,17 @@ Idx Name          Size      VMA       LMA       File off  Algn
                   CONTENTS, READONLY, DEBUGGING, OCTETS
  15 .debug_rnglists 00000b03  00000000  00000000  0001c4e0  2**0
                   CONTENTS, READONLY, DEBUGGING, OCTETS
- 16 .debug_macro  0001ac15  00000000  00000000  0001cfe3  2**0
+ 16 .debug_macro  0001923a  00000000  00000000  0001cfe3  2**0
                   CONTENTS, READONLY, DEBUGGING, OCTETS
- 17 .debug_line   0000fc99  00000000  00000000  00037bf8  2**0
+ 17 .debug_line   0000fc99  00000000  00000000  0003621d  2**0
                   CONTENTS, READONLY, DEBUGGING, OCTETS
- 18 .debug_str    000a1e79  00000000  00000000  00047891  2**0
+ 18 .debug_str    000a1e79  00000000  00000000  00045eb6  2**0
                   CONTENTS, READONLY, DEBUGGING, OCTETS
- 19 .comment      00000043  00000000  00000000  000e970a  2**0
+ 19 .comment      00000043  00000000  00000000  000e7d2f  2**0
                   CONTENTS, READONLY
- 20 .debug_frame  00003ee4  00000000  00000000  000e9750  2**2
+ 20 .debug_frame  00003ee4  00000000  00000000  000e7d74  2**2
                   CONTENTS, READONLY, DEBUGGING, OCTETS
- 21 .debug_line_str 00000056  00000000  00000000  000ed634  2**0
+ 21 .debug_line_str 00000056  00000000  00000000  000ebc58  2**0
                   CONTENTS, READONLY, DEBUGGING, OCTETS
 
 Disassembly of section .text:
@@ -2258,8 +2258,8 @@ int main(void)
     	  					TxData[3] = 0x00;							// Speed Command hi
  800167e:	2300      	movs	r3, #0
  8001680:	f887 3033 	strb.w	r3, [r7, #51]	@ 0x33
-    	  					TxData[4] = 0x00; // Direction: Reverse = 0x00 | Forward = 0x01;
- 8001684:	2300      	movs	r3, #0
+    	  					TxData[4] = 0x01; // Direction: Reverse = 0x00 | Forward = 0x01;
+ 8001684:	2301      	movs	r3, #1
  8001686:	f887 3034 	strb.w	r3, [r7, #52]	@ 0x34
     	  					TxData[5] = 0x00 | 0x02 | (heartbeat_counter << 4);// 5[0] = Inv enable | 5[1] = Discharge enable | counter
  800168a:	f997 30e7 	ldrsb.w	r3, [r7, #231]	@ 0xe7
@@ -2322,8 +2322,8 @@ int main(void)
     	  				TxData[3] = 0x00;								// Speed Command hi
  8001706:	2300      	movs	r3, #0
  8001708:	f887 3033 	strb.w	r3, [r7, #51]	@ 0x33
-    	  				TxData[4] = 0x00; 	// Direction: Reverse = 0x00 | Forward = 0x01;
- 800170c:	2300      	movs	r3, #0
+    	  				TxData[4] = 0x01; 	// Direction: Reverse = 0x00 | Forward = 0x01;
+ 800170c:	2301      	movs	r3, #1
  800170e:	f887 3034 	strb.w	r3, [r7, #52]	@ 0x34
     	  				TxData[5] = (~should_disable_inverter & 0x01) | 0x02 | (heartbeat_counter << 4); // 5[0] = Inv enable | 5[1] = Discharge enable | counter
  8001712:	f897 309a 	ldrb.w	r3, [r7, #154]	@ 0x9a
@@ -2420,7 +2420,7 @@ int main(void)
  80017f6:	091b      	lsrs	r3, r3, #4
  80017f8:	b2db      	uxtb	r3, r3
  80017fa:	f887 3033 	strb.w	r3, [r7, #51]	@ 0x33
-    	  				TxData[4] = (inverter_lockout << 7) | (inverter_enabled << 6) | (tps_dist_error << 5) | (tps2_oor << 4) | (tps1_oor << 3) | (brake_pressed << 2) | (ready_to_drive << 1) | should_disable_inverter;
+    	  				TxData[4] = (inverter_lockout << 7) | (inverter_enabled << 6) | (tps_dist_error << 5) | (tps2_oor << 4) | (tps1_oor << 3) | (bse_error << 2) | (ready_to_drive << 1) | should_disable_inverter;
  80017fe:	4b5d      	ldr	r3, [pc, #372]	@ (8001974 <main+0xa9c>)
  8001800:	781b      	ldrb	r3, [r3, #0]
  8001802:	b2db      	uxtb	r3, r3
@@ -2456,7 +2456,7 @@ int main(void)
  800183e:	b25b      	sxtb	r3, r3
  8001840:	4313      	orrs	r3, r2
  8001842:	b25a      	sxtb	r2, r3
- 8001844:	f997 309b 	ldrsb.w	r3, [r7, #155]	@ 0x9b
+ 8001844:	f997 30e6 	ldrsb.w	r3, [r7, #230]	@ 0xe6
  8001848:	009b      	lsls	r3, r3, #2
  800184a:	b25b      	sxtb	r3, r3
  800184c:	4313      	orrs	r3, r2
@@ -4306,7 +4306,7 @@ void SystemInit (void)
 Reset_Handler:
 
 /* Call the clock system initialization function.*/
-    bl  SystemInit
+  bl  SystemInit
  8002258:	f7ff fff8 	bl	800224c <SystemInit>
 
 /* Copy the data segment initializers from flash to SRAM */

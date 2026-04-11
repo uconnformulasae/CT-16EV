@@ -1,0 +1,8 @@
+../Core/Src/launch_control.c:36:17:lc_map_lookup	48	static
+../Core/Src/launch_control.c:80:14:motor_rpm_to_wheel_ms	16	static
+../Core/Src/launch_control.c:86:6:lc_init	4	static
+../Core/Src/launch_control.c:104:6:lc_feed_wheel_speed	24	static
+../Core/Src/launch_control.c:113:6:lc_feed_tick	16	static
+../Core/Src/launch_control.c:118:19:lc_get_debug	4	static
+../Core/Src/launch_control.c:123:12:lc_get_state	4	static
+../Core/Src/launch_control.c:129:10:lc_update	80	static

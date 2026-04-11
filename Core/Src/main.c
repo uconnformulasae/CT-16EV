@@ -185,8 +185,16 @@ double tmap_lut(double tps) {
 	return tps_local;
 }
 
+/*
+ *
+ * Goals: Step function to tune PID WITHOUT TIRES SlIPPING
+ * Ideas:
+ * Different step heights(10nm -> 60nm, 60nm -> 220nm)
+ * Manual Control unntil x%, Torque limit afterwards.
+ */
+uint32_t torque_limit_local = torque_limit;
 int torque_lut(double tps) {
-	uint32_t torque_limit_local = torque_limit;
+	torque_limit_local = torque_limit;
 	torque_limit_local = fmin(torque_limit, (double) (4200 * current_limit) * 1.0 / fmax(230.4, (double) motor_speed * 0.1076));
 	//if(motor_speed < 150){
 		//torque_limit_local = fmin(torque_limit_local, 900);
@@ -194,6 +202,9 @@ int torque_lut(double tps) {
 	if(motor_speed >= 6000){
 		torque_limit_local = 300;
 	}
+	//UNCOMMENT THIS SHIT THIS IS FOR THE AWESOME STEP FUNCTION
+	return (tps > 0.5) ? torque_limit_local : tps * torque_limit_local;
+
 	return tps * torque_limit_local;
 }
 
@@ -324,10 +335,11 @@ int main(void)
     	  		debugHeader.RTR = CAN_RTR_DATA;
     	  		debugHeader.DLC = 8;
 
+    	  		//Ayy lmao surely there's no real consequences to this
     	  		rtdHeader.IDE = CAN_ID_STD;
     	  		rtdHeader.StdId = 0x556;
     	  		rtdHeader.RTR = CAN_RTR_DATA;
-    	  		rtdHeader.DLC = 1;
+    	  		rtdHeader.DLC = 3;
 
 
     	  		double tps1 = 0;
@@ -454,7 +466,7 @@ int main(void)
     	  					TxData[1] = torque_request >> 8 & 0xFF;		// Torque Command hi
     	  					TxData[2] = 0x00;							// Speed Command lo
     	  					TxData[3] = 0x00;							// Speed Command hi
-    	  					TxData[4] = 0x00; // Direction: Reverse = 0x00 | Forward = 0x01;
+    	  					TxData[4] = 0x01; // Direction: Reverse = 0x00 | Forward = 0x01;
     	  					TxData[5] = 0x00 | 0x02 | (heartbeat_counter << 4);// 5[0] = Inv enable | 5[1] = Discharge enable | counter
     	  					TxData[6] = 0x00;			// Torque limit lo, 0 = EEprom limit
     	  					TxData[7] = 0x00;			// Torque limit hi, 0 = EEprom limit
@@ -473,7 +485,7 @@ int main(void)
     	  				TxData[1] = torque_request >> 8 & 0xFF;			// Torque Command hi
     	  				TxData[2] = 0x00;								// Speed Command lo
     	  				TxData[3] = 0x00;								// Speed Command hi
-    	  				TxData[4] = 0x00; 	// Direction: Reverse = 0x00 | Forward = 0x01;
+    	  				TxData[4] = 0x01; 	// Direction: Reverse = 0x00 | Forward = 0x01;
     	  				TxData[5] = (~should_disable_inverter & 0x01) | 0x02 | (heartbeat_counter << 4); // 5[0] = Inv enable | 5[1] = Discharge enable | counter
     	  				TxData[6] = 0x00;				// Torque limit lo, 0 = EEprom limit
     	  				TxData[7] = 0x00;				// Torque limit hi, 0 = EEprom limit
@@ -493,7 +505,7 @@ int main(void)
     	  				TxData[1] = (bps_adc >> 4) & 0xFF;
     	  				TxData[2] = (tps1_adc >> 4) & 0xFF;
     	  				TxData[3] = (tps2_adc >> 4) & 0xFF;
-    	  				TxData[4] = (inverter_lockout << 7) | (inverter_enabled << 6) | (tps_dist_error << 5) | (tps2_oor << 4) | (tps1_oor << 3) | (brake_pressed << 2) | (ready_to_drive << 1) | should_disable_inverter;
+    	  				TxData[4] = (inverter_lockout << 7) | (inverter_enabled << 6) | (tps_dist_error << 5) | (tps2_oor << 4) | (tps1_oor << 3) | (bse_error << 2) | (ready_to_drive << 1) | should_disable_inverter;
     	  				TxData[5] = (int) (tps1 * 100) & 0xff;
     	  				TxData[6] = (int) (tps2 * 100) & 0xff;
     	  				TxData[7] = (int) (tmap_lut(tps_combined) * 100) & 0xFF;
@@ -503,6 +515,8 @@ int main(void)
     	  					Error_Handler();
     	  				}
     	  				TxData[0] = (ready_to_drive) & 0x01;
+    	  				TxData[1] = torque_limit_local & 0xFF;
+    	  				TxData[2] = torque_limit_local >> 8 & 0xFF;
 
     	  				if (HAL_CAN_AddTxMessage(&hcan, &rtdHeader, TxData, &TxMailbox)
     	  						!= HAL_OK) {
