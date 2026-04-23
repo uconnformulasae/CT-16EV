@@ -21,7 +21,6 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include <stdio.h>
 #include <math.h>
 
 //TPS1 0 Nominal 1.6564 :: 100 Nominal 2.2905
@@ -41,11 +40,11 @@
 #define TPS2_100PER 1.55
 
 #define TPS2_FAULT_LOW 0.2
-#define TPS2_FAULT_HIGH 1.7
+#define TPS2_FAULT_HIGH 2.8
 
 #define BPS_Setpoint 0.765
 
-#define APPS_TRIP_PERCENT 0.1
+#define APPS_TRIP_PERCENT 0.4
 
 #define TPS_IIR_RATIO 0.
 
@@ -104,12 +103,12 @@ static void MX_ADC3_Init(void);
 /* USER CODE BEGIN 0 */
 CAN_RxHeaderTypeDef RxHeader;
 
-uint8_t RxData[8];
+volatile uint8_t RxData[8];
 uint8_t ddb = 10;
-uint32_t torque_limit = 2200;
-uint32_t motor_speed = 0;
-uint32_t current_limit = 125;
-uint32_t bus_voltage = 396;
+uint32_t torque_limit = 2200; //x10
+volatile int16_t motor_speed = 0;
+volatile uint32_t current_limit = 125;
+volatile uint32_t bus_voltage = 396;
 volatile uint8_t inverter_enabled = 0;
 volatile uint8_t inverter_lockout = 1;
 uint8_t can_ready = 0;
@@ -125,9 +124,26 @@ volatile uint8_t start_disable_debounce = 1;
 volatile uint16_t disable_debounce = 999;
 
 
+volatile double dbg_tps1 = 0.0;
+volatile double dbg_tps2 = 0.0;
+volatile double dbg_tps_combined = 0.0;
+volatile double dbg_tps1_v = 0.0;
+volatile double dbg_tps2_v = 0.0;
+volatile double dbg_bps = 0.0;
+volatile uint32_t dbg_bps_adc = 0;
+volatile uint32_t dbg_tps1_adc = 0;
+volatile uint32_t dbg_tps2_adc = 0;
+volatile uint32_t dbg_torque_request = 0;
+volatile uint32_t dbg_torque_limit_local = 0;
+volatile uint8_t dbg_should_disable_inverter = 0;
+volatile uint8_t dbg_brake_pressed = 0;
+volatile uint8_t dbg_bse_error = 0;
+volatile uint32_t bms_dcl_rejected_count = 0;
+
+
 
 void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan) {
-	if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &RxHeader, RxData) != HAL_OK) {
+	if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &RxHeader, (uint8_t *)RxData) != HAL_OK) {
 
 		Error_Handler();
 	}
@@ -145,10 +161,16 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan) {
 		}
 	}
 	else if (RxHeader.StdId == 0x0A5){
-		motor_speed = RxData[3] << 8 | RxData[2];
+		motor_speed = (int16_t)((RxData[3] << 8) | RxData[2]);
 	}
 	else if (RxHeader.StdId == 0x202){
-		current_limit = (RxData[1] << 8 | RxData[0]) - 3;
+	    uint16_t raw_dcl = (RxData[1] << 8) | RxData[0];
+	    if (raw_dcl < 126) {
+	        current_limit = raw_dcl;
+	    }
+	    else {
+	        bms_dcl_rejected_count++;
+	    }
 	}
 	else if (RxHeader.StdId == 0x600){
 			bus_voltage = (RxData[5] << 8 | RxData[4]);
@@ -181,19 +203,20 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 double tmap_lut(double tps) {
 	double V_MIN = 0.1;
 	double V_MAX = 0.9;
-	double tps_local = (fmax(V_MIN, fmin(tps, V_MAX)) - V_MIN) * (1 / (V_MAX - V_MIN));
+	double tps_local = (fmax(V_MIN, fmin(tps, V_MAX)) - V_MIN) * (1.0 / (V_MAX - V_MIN));
 	return tps_local;
 }
 
 int torque_lut(double tps) {
 	uint32_t torque_limit_local = torque_limit;
-	torque_limit_local = fmin(torque_limit, (double) (4200 * current_limit) * 1.0 / fmax(230.4, (double) motor_speed * 0.1076));
+	torque_limit_local = fmin(torque_limit, 4200.0 * current_limit / fmax(230.4, (double) motor_speed * 0.1076));
 	//if(motor_speed < 150){
 		//torque_limit_local = fmin(torque_limit_local, 900);
 	//}
 	if(motor_speed >= 6000){
 		torque_limit_local = 300;
 	}
+	dbg_torque_limit_local = torque_limit_local;
 	return tps * torque_limit_local;
 }
 
@@ -314,7 +337,7 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-    	TxHeader.IDE = CAN_ID_STD;
+    			TxHeader.IDE = CAN_ID_STD;
     	  		TxHeader.StdId = 0x0C0;
     	  		TxHeader.RTR = CAN_RTR_DATA;
     	  		TxHeader.DLC = 8;
@@ -356,57 +379,60 @@ int main(void)
     	  			HAL_ADC_Start(ADC_BPS);
     	  			HAL_ADC_Start(ADC_TPS1);
     	  			HAL_ADC_Start(ADC_TPS2);
-    	  			
+
     	  			HAL_CAN_AbortTxRequest(&hcan, CAN_TX_MAILBOX0 | CAN_TX_MAILBOX1 | CAN_TX_MAILBOX2);
 
     	  			// Throttle Position Potentiometer 1 Acquire and Calculate
     	  			HAL_ADC_PollForConversion(ADC_TPS1, HAL_MAX_DELAY);
     	  			tps1_adc = HAL_ADC_GetValue(ADC_TPS1);
-    	  			double tps1_v = ((double) tps1_adc) / 4095 * 3.3;
+    	  			double tps1_v = ((double) tps1_adc) / 4095.0 * 3.3;
     	  			tps1 = (tps1_v - TPS1_0PER) / (TPS1_100PER - TPS1_0PER); // Percentage
-    	  			tps1 = fmax(tps1, 0);
-    	  			tps1_avg = (tps1_avg == 0) ? tps1 : tps1_avg * TPS_IIR_RATIO + tps1 * (1 - TPS_IIR_RATIO);
+    	  			tps1 = fmax(tps1, 0.0);
+    	  			tps1_avg = (tps1_avg == 0.0) ? tps1 : tps1_avg * TPS_IIR_RATIO + tps1 * (1.0 - TPS_IIR_RATIO);
     	  			tps1 = tps1_avg;
-    	  			
+
 
     	  			// Throttle Position Potentiometer 2 Acquire and Calculate
     	  			HAL_ADC_PollForConversion(ADC_TPS2, HAL_MAX_DELAY);
     	  			tps2_adc = HAL_ADC_GetValue(ADC_TPS2);
-    	  			double tps2_v = ((double) tps2_adc) / 4095 * 3.3;
+    	  			double tps2_v = ((double) tps2_adc) / 4095.0 * 3.3;
     	  			tps2 = (tps2_v - TPS2_0PER) / (TPS2_100PER - TPS2_0PER); // Percentage
-    	  			tps2 = fmax(tps2, 0);
-    	  			tps2_avg = (tps2_avg == 0) ? tps2 : tps2_avg * TPS_IIR_RATIO + tps2 * (1 - TPS_IIR_RATIO);
+    	  			tps2 = fmax(tps2, 0.0);
+    	  			tps2_avg = (tps2_avg == 0.0) ? tps2 : tps2_avg * TPS_IIR_RATIO + tps2 * (1.0 - TPS_IIR_RATIO);
     	  			tps2 = tps2_avg;
-    	  			
+
     	  			// TPS and Torque request calculate
-    	  			tps_combined = (tps1 + tps2) / 2;
+    	  			tps_combined = (tps1 + tps2) / 2.0;
     	  			torque_request = torque_lut(tmap_lut(tps_combined));
-    	  			
+
     	  			// Brake Pressure Acquire and Calculate
     	  			HAL_ADC_PollForConversion(ADC_BPS, HAL_MAX_DELAY);
     	  			bps_adc = HAL_ADC_GetValue(ADC_BPS);
-    	  			bps = ((double) bps_adc) / 4095 * 5;
+    	  			bps = ((double) bps_adc) / 4095.0 * 5.0;
     	  			brake_pressed = bps > BPS_Setpoint;
-    	  			
+
     	  			// Ready to Drive button poll
-    	  			rtd_raw = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_5);
+    	  			rtd_raw = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_14);
     	  			rtd_raw &= brake_pressed;
-    	  			
+
     	  			if (rtd_raw){
 						rtd_debounce += 3;
 					}
 					else {
 						rtd_debounce -= 4;
 					}
-    	  			
+
     	  			rtd_debounce = fmin(fmax(rtd_debounce, 0), 100);
 
     	  			if (rtd_debounce > 50){
     	  				ready_to_drive = 1;
     	  			}
 
-    	  			ready_to_drive &= rtd_timeout < 20;
+    	 		///////////////////UN COMMENT THIS PLZ///////////////////
 
+    	  		//	ready_to_drive &= rtd_timeout < 20;
+
+    	  		//////////////////////////////////////////////////////////
     	  			// Ready to Drive dashboard light
     	  			HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, ready_to_drive);
 
@@ -416,18 +442,18 @@ int main(void)
     	  			}
     	  			else {
 						if(rtd_buzzer_counter < 25){
-							HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+							HAL_GPIO_WritePin(GPIOB, GPIO_PIN_2, GPIO_PIN_SET);
 						}
 						else{
-							HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+							HAL_GPIO_WritePin(GPIOB, GPIO_PIN_2, GPIO_PIN_RESET);
 						}
     	  			}
-    	  			
+
     	  			// Error States
 					tps1_oor = tps1_v < TPS1_FAULT_LOW || tps1_v > TPS1_FAULT_HIGH;
 					tps2_oor = tps2_v < TPS2_FAULT_LOW || tps2_v > TPS2_FAULT_HIGH;
-					tps1 = fmin(tps1, 100);
-					tps2 = fmin(tps2, 100);
+					tps1 = fmin(tps1, 1.0);
+					tps2 = fmin(tps2, 1.0);
     	  			tps_dist_error = fabs(tps1 - tps2) > APPS_TRIP_PERCENT;
 
     	  			if(!bse_error){
@@ -438,12 +464,27 @@ int main(void)
     	  			}
 
     	  			// Disable Inverter if any errors present
-    	  			start_disable_debounce = tps1_oor || tps2_oor || tps_dist_error || bse_error;
+    	  			start_disable_debounce = tps1_oor || tps2_oor || tps_dist_error || bse_error || (torque_request < 5 && motor_speed < 500);
     	  			should_disable_inverter = (disable_debounce > 5) || !ready_to_drive;
 
     	  			if (should_disable_inverter) {
     	  				torque_request = 0;
     	  			}
+
+    	  			// CUBEMON
+    	  			dbg_tps1 = tps1;
+    	  			dbg_tps2 = tps2;
+    	  			dbg_tps_combined = tps_combined;
+    	  			dbg_tps1_v = tps1_v;
+    	  			dbg_tps2_v = tps2_v;
+    	  			dbg_bps = bps;
+    	  			dbg_bps_adc = bps_adc;
+    	  			dbg_tps1_adc = tps1_adc;
+    	  			dbg_tps2_adc = tps2_adc;
+    	  			dbg_torque_request = torque_request;
+    	  			dbg_should_disable_inverter = should_disable_inverter;
+    	  			dbg_brake_pressed = brake_pressed;
+    	  			dbg_bse_error = bse_error;
 
     	  			if (can_ready) {	// Every ~10 (?) ms
     	  				if (inverter_lockout == 1) {
@@ -490,7 +531,7 @@ int main(void)
     	  				TxData[1] = (bps_adc >> 4) & 0xFF;
     	  				TxData[2] = (tps1_adc >> 4) & 0xFF;
     	  				TxData[3] = (tps2_adc >> 4) & 0xFF;
-    	  				TxData[4] = (inverter_lockout << 7) | (inverter_enabled << 6) | (tps_dist_error << 5) | (tps2_oor << 4) | (tps1_oor << 3) | (bse_error << 2) | (!ready_to_drive << 1) | should_disable_inverter;
+    	  				TxData[4] = (inverter_lockout << 7) | (inverter_enabled << 6) | (tps_dist_error << 5) | (tps2_oor << 4) | (tps1_oor << 3) | (brake_pressed << 2) | (ready_to_drive << 1) | should_disable_inverter;
     	  				TxData[5] = (int) (tps1 * 100) & 0xff;
     	  				TxData[6] = (int) (tps2 * 100) & 0xff;
     	  				TxData[7] = (int) (tmap_lut(tps_combined) * 100) & 0xFF;
@@ -513,6 +554,7 @@ int main(void)
     	  						break;
     	  					}
     	  				}
+
     	  				print_ready = 0;
     	  			}
     /* USER CODE END WHILE */
@@ -902,10 +944,10 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PB4 PB5 PB6 */
-  GPIO_InitStruct.Pin = GPIO_PIN_4|GPIO_PIN_5|GPIO_PIN_6;
+  /*Configure GPIO pins : PB12 PB13 PB14 */
+  GPIO_InitStruct.Pin = GPIO_PIN_12|GPIO_PIN_13|GPIO_PIN_14;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
@@ -929,8 +971,7 @@ void Error_Handler(void)
 	}
   /* USER CODE END Error_Handler_Debug */
 }
-
-#ifdef  USE_FULL_ASSERT
+#ifdef USE_FULL_ASSERT
 /**
   * @brief  Reports the name of the source file and the source line number
   *         where the assert_param error has occurred.
