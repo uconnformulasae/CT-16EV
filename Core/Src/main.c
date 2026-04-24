@@ -21,6 +21,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include <stdio.h>
 #include <math.h>
 
 //TPS1 0 Nominal 1.6564 :: 100 Nominal 2.2905
@@ -101,12 +102,14 @@ static void MX_ADC3_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+
 CAN_RxHeaderTypeDef RxHeader;
 
 volatile uint8_t RxData[8];
 uint8_t ddb = 10;
 uint32_t torque_limit = 2200; //x10
-volatile int16_t motor_speed = 0;
+volatile uint32_t motor_speed = 0;
 volatile uint32_t current_limit = 125;
 volatile uint32_t bus_voltage = 396;
 volatile uint8_t inverter_enabled = 0;
@@ -123,7 +126,6 @@ volatile uint8_t rtd_buzzer_counter = 0;
 volatile uint8_t start_disable_debounce = 1;
 volatile uint16_t disable_debounce = 999;
 
-
 volatile double dbg_tps1 = 0.0;
 volatile double dbg_tps2 = 0.0;
 volatile double dbg_tps_combined = 0.0;
@@ -138,16 +140,23 @@ volatile uint32_t dbg_torque_limit_local = 0;
 volatile uint8_t dbg_should_disable_inverter = 0;
 volatile uint8_t dbg_brake_pressed = 0;
 volatile uint8_t dbg_bse_error = 0;
-volatile uint32_t bms_dcl_rejected_count = 0;
-
+//volatile uint32_t bms_dcl_rejected_count = 0;
+//volatile uint32_t bms_dcl_accepted_count = 0;
+volatile uint32_t bms_raw_dcl = 0;
+volatile int32_t dumbass_count = 0;
 
 
 void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan) {
+	RxHeader.StdId = 0;
 	if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &RxHeader, (uint8_t *)RxData) != HAL_OK) {
 
 		Error_Handler();
 	}
-
+	//Still a band aid fix.
+	if(RxHeader.IDE != CAN_ID_STD){
+		dumbass_count++;
+		return;
+	}
 	if (RxHeader.StdId == 0x0B1) {
 		//torque_limit = RxData[1] << 8 | RxData[0];
 	}
@@ -161,16 +170,19 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan) {
 		}
 	}
 	else if (RxHeader.StdId == 0x0A5){
-		motor_speed = (int16_t)((RxData[3] << 8) | RxData[2]);
+		motor_speed = RxData[3] << 8 | RxData[2];
 	}
 	else if (RxHeader.StdId == 0x202){
-	    uint16_t raw_dcl = (RxData[1] << 8) | RxData[0];
-	    if (raw_dcl < 126) {
-	        current_limit = raw_dcl;
-	    }
-	    else {
-	        bms_dcl_rejected_count++;
-	    }
+	    current_limit = (RxData[1] << 8) | RxData[0];
+//	    bms_raw_dcl = raw_dcl;
+//	    if (raw_dcl <= 126) {
+//	        current_limit = raw_dcl;
+//	        bms_dcl_accepted_count++;
+//	    }
+//	    else {
+//
+//	    	bms_dcl_rejected_count++;
+//	    }
 	}
 	else if (RxHeader.StdId == 0x600){
 			bus_voltage = (RxData[5] << 8 | RxData[4]);
@@ -203,13 +215,13 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 double tmap_lut(double tps) {
 	double V_MIN = 0.1;
 	double V_MAX = 0.9;
-	double tps_local = (fmax(V_MIN, fmin(tps, V_MAX)) - V_MIN) * (1.0 / (V_MAX - V_MIN));
+	double tps_local = (fmax(V_MIN, fmin(tps, V_MAX)) - V_MIN) * (1 / (V_MAX - V_MIN));
 	return tps_local;
 }
 
 int torque_lut(double tps) {
 	uint32_t torque_limit_local = torque_limit;
-	torque_limit_local = fmin(torque_limit, 4200.0 * current_limit / fmax(230.4, (double) motor_speed * 0.1076));
+	torque_limit_local = fmin(torque_limit, (double) (4200 * current_limit) * 1.0 / fmax(230.4, (double) motor_speed * 0.1076));
 	//if(motor_speed < 150){
 		//torque_limit_local = fmin(torque_limit_local, 900);
 	//}
@@ -352,7 +364,6 @@ int main(void)
     	  		rtdHeader.RTR = CAN_RTR_DATA;
     	  		rtdHeader.DLC = 1;
 
-
     	  		double tps1 = 0;
     	  		double tps2 = 0;
     	  		double tps_combined = 0;
@@ -385,30 +396,30 @@ int main(void)
     	  			// Throttle Position Potentiometer 1 Acquire and Calculate
     	  			HAL_ADC_PollForConversion(ADC_TPS1, HAL_MAX_DELAY);
     	  			tps1_adc = HAL_ADC_GetValue(ADC_TPS1);
-    	  			double tps1_v = ((double) tps1_adc) / 4095.0 * 3.3;
+    	  			double tps1_v = ((double) tps1_adc) / 4095 * 3.3;
     	  			tps1 = (tps1_v - TPS1_0PER) / (TPS1_100PER - TPS1_0PER); // Percentage
-    	  			tps1 = fmax(tps1, 0.0);
-    	  			tps1_avg = (tps1_avg == 0.0) ? tps1 : tps1_avg * TPS_IIR_RATIO + tps1 * (1.0 - TPS_IIR_RATIO);
+    	  			tps1 = fmax(tps1, 0);
+    	  			tps1_avg = (tps1_avg == 0) ? tps1 : tps1_avg * TPS_IIR_RATIO + tps1 * (1 - TPS_IIR_RATIO);
     	  			tps1 = tps1_avg;
 
 
     	  			// Throttle Position Potentiometer 2 Acquire and Calculate
     	  			HAL_ADC_PollForConversion(ADC_TPS2, HAL_MAX_DELAY);
     	  			tps2_adc = HAL_ADC_GetValue(ADC_TPS2);
-    	  			double tps2_v = ((double) tps2_adc) / 4095.0 * 3.3;
+    	  			double tps2_v = ((double) tps2_adc) / 4095 * 3.3;
     	  			tps2 = (tps2_v - TPS2_0PER) / (TPS2_100PER - TPS2_0PER); // Percentage
-    	  			tps2 = fmax(tps2, 0.0);
-    	  			tps2_avg = (tps2_avg == 0.0) ? tps2 : tps2_avg * TPS_IIR_RATIO + tps2 * (1.0 - TPS_IIR_RATIO);
+    	  			tps2 = fmax(tps2, 0);
+    	  			tps2_avg = (tps2_avg == 0) ? tps2 : tps2_avg * TPS_IIR_RATIO + tps2 * (1 - TPS_IIR_RATIO);
     	  			tps2 = tps2_avg;
 
     	  			// TPS and Torque request calculate
-    	  			tps_combined = (tps1 + tps2) / 2.0;
+    	  			tps_combined = (tps1 + tps2) / 2;
     	  			torque_request = torque_lut(tmap_lut(tps_combined));
 
     	  			// Brake Pressure Acquire and Calculate
     	  			HAL_ADC_PollForConversion(ADC_BPS, HAL_MAX_DELAY);
     	  			bps_adc = HAL_ADC_GetValue(ADC_BPS);
-    	  			bps = ((double) bps_adc) / 4095.0 * 5.0;
+    	  			bps = ((double) bps_adc) / 4095 * 5;
     	  			brake_pressed = bps > BPS_Setpoint;
 
     	  			// Ready to Drive button poll
@@ -452,8 +463,8 @@ int main(void)
     	  			// Error States
 					tps1_oor = tps1_v < TPS1_FAULT_LOW || tps1_v > TPS1_FAULT_HIGH;
 					tps2_oor = tps2_v < TPS2_FAULT_LOW || tps2_v > TPS2_FAULT_HIGH;
-					tps1 = fmin(tps1, 1.0);
-					tps2 = fmin(tps2, 1.0);
+					tps1 = fmin(tps1, 100);
+					tps2 = fmin(tps2, 100);
     	  			tps_dist_error = fabs(tps1 - tps2) > APPS_TRIP_PERCENT;
 
     	  			if(!bse_error){
@@ -554,6 +565,8 @@ int main(void)
     	  						break;
     	  					}
     	  				}
+
+
 
     	  				print_ready = 0;
     	  			}
