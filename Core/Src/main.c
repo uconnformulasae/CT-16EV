@@ -53,6 +53,10 @@
 #define ADC_TPS2    &hadc2
 #define ADC_BPS		&hadc3
 
+// Accept one StdId
+#define CAN_STID_MASK_HIGH	0xFFE0
+#define CAN_STID_MASK_LOW	0x0004
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -283,56 +287,56 @@ int main(void)
     	CAN_FilterTypeDef canfilterconfig;
 
     	canfilterconfig.FilterActivation = CAN_FILTER_ENABLE;
-    	canfilterconfig.FilterBank = 1; // which filter bank to use from the assigned ones
+    	canfilterconfig.FilterBank = 1; // 0x0B1 torque limit
     	canfilterconfig.FilterFIFOAssignment = CAN_RX_FIFO0;
     	canfilterconfig.FilterIdHigh = 0x0B1 << 5;
     	canfilterconfig.FilterIdLow = 0;
-    	canfilterconfig.FilterMaskIdHigh = 0x0B1 << 5;
-    	canfilterconfig.FilterMaskIdLow = 0x0000;
+    	canfilterconfig.FilterMaskIdHigh = CAN_STID_MASK_HIGH;
+    	canfilterconfig.FilterMaskIdLow = CAN_STID_MASK_LOW;
     	canfilterconfig.FilterMode = CAN_FILTERMODE_IDMASK;
     	canfilterconfig.FilterScale = CAN_FILTERSCALE_32BIT;
     	HAL_CAN_ConfigFilter(&hcan, &canfilterconfig);
 
     	canfilterconfig.FilterActivation = CAN_FILTER_ENABLE;
-    	canfilterconfig.FilterBank = 2; // which filter bank to use from the assigned ones
+    	canfilterconfig.FilterBank = 2; // 0x0AA inverter status
     	canfilterconfig.FilterFIFOAssignment = CAN_RX_FIFO0;
     	canfilterconfig.FilterIdHigh = 0x0AA << 5;
     	canfilterconfig.FilterIdLow = 0;
-    	canfilterconfig.FilterMaskIdHigh = 0x0AA << 5;
-    	canfilterconfig.FilterMaskIdLow = 0x0000;
+    	canfilterconfig.FilterMaskIdHigh = CAN_STID_MASK_HIGH;
+    	canfilterconfig.FilterMaskIdLow = CAN_STID_MASK_LOW;
     	canfilterconfig.FilterMode = CAN_FILTERMODE_IDMASK;
     	canfilterconfig.FilterScale = CAN_FILTERSCALE_32BIT;
     	HAL_CAN_ConfigFilter(&hcan, &canfilterconfig);
 
     	canfilterconfig.FilterActivation = CAN_FILTER_ENABLE;
-    	canfilterconfig.FilterBank = 3; // which filter bank to use from the assigned ones
+    	canfilterconfig.FilterBank = 3; // 0x0A5 motor speed
     	canfilterconfig.FilterFIFOAssignment = CAN_RX_FIFO0;
     	canfilterconfig.FilterIdHigh = 0x0A5 << 5;
     	canfilterconfig.FilterIdLow = 0;
-    	canfilterconfig.FilterMaskIdHigh = 0x0A5 << 5;
-    	canfilterconfig.FilterMaskIdLow = 0x0000;
+    	canfilterconfig.FilterMaskIdHigh = CAN_STID_MASK_HIGH;
+    	canfilterconfig.FilterMaskIdLow = CAN_STID_MASK_LOW;
     	canfilterconfig.FilterMode = CAN_FILTERMODE_IDMASK;
     	canfilterconfig.FilterScale = CAN_FILTERSCALE_32BIT;
     	HAL_CAN_ConfigFilter(&hcan, &canfilterconfig);
 
     	canfilterconfig.FilterActivation = CAN_FILTER_ENABLE;
-    	canfilterconfig.FilterBank = 4; // which filter bank to use from the assigned ones
+    	canfilterconfig.FilterBank = 4; // 0x202 BMS DCL
     	canfilterconfig.FilterFIFOAssignment = CAN_RX_FIFO0;
     	canfilterconfig.FilterIdHigh = 0x202 << 5;
     	canfilterconfig.FilterIdLow = 0;
-    	canfilterconfig.FilterMaskIdHigh = 0x202 << 5;
-    	canfilterconfig.FilterMaskIdLow = 0x0000;
+    	canfilterconfig.FilterMaskIdHigh = CAN_STID_MASK_HIGH;
+    	canfilterconfig.FilterMaskIdLow = CAN_STID_MASK_LOW;
     	canfilterconfig.FilterMode = CAN_FILTERMODE_IDMASK;
     	canfilterconfig.FilterScale = CAN_FILTERSCALE_32BIT;
     	HAL_CAN_ConfigFilter(&hcan, &canfilterconfig);
 
     	canfilterconfig.FilterActivation = CAN_FILTER_ENABLE;
-    	canfilterconfig.FilterBank = 5; // which filter bank to use from the assigned ones
+    	canfilterconfig.FilterBank = 5; // 0x600 BMS bus voltage
     	canfilterconfig.FilterFIFOAssignment = CAN_RX_FIFO0;
     	canfilterconfig.FilterIdHigh = 0x600 << 5;
     	canfilterconfig.FilterIdLow = 0;
-    	canfilterconfig.FilterMaskIdHigh = 0x600 << 5;
-    	canfilterconfig.FilterMaskIdLow = 0x0000;
+    	canfilterconfig.FilterMaskIdHigh = CAN_STID_MASK_HIGH;
+    	canfilterconfig.FilterMaskIdLow = CAN_STID_MASK_LOW;
     	canfilterconfig.FilterMode = CAN_FILTERMODE_IDMASK;
     	canfilterconfig.FilterScale = CAN_FILTERSCALE_32BIT;
     	HAL_CAN_ConfigFilter(&hcan, &canfilterconfig);
