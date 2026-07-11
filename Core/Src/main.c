@@ -23,7 +23,7 @@
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
 #include <math.h>
-#include "launch_control.h"
+//#include "launch_control.h"
 
 
 //TPS1 0 Nominal 1.6564 :: 100 Nominal 2.2905
@@ -408,6 +408,17 @@ int main(void)
     	  			// TPS and Torque request calculate
     	  			tps_combined = (tps1 + tps2) / 2;
     	  			torque_request = torque_lut(tmap_lut(tps_combined));
+
+
+    	  			if (tps_combined < 0.05f && motor_speed > 500 && brake_pressed != 0){
+
+    	  				torque_request = - 1;
+
+
+    	  			}
+
+
+
 
     	  			// Launch control: only active when enabled
     	  			if (launch_control_enable) {
