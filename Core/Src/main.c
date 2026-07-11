@@ -361,7 +361,7 @@ int main(void)
     	  		float tps2 = 0;
     	  		float tps_combined = 0;
     	  		float bps = 0;
-    	  		uint32_t torque_request = 0;
+    	  		int32_t torque_request = 0;
     	  		uint8_t heartbeat_counter = 0;
     	  		uint32_t tps1_adc = 0;
     	  		uint32_t tps2_adc = 0;
@@ -410,12 +410,10 @@ int main(void)
     	  			torque_request = torque_lut(tmap_lut(tps_combined));
 
 
-    	  			if (tps_combined < 0.05f && motor_speed > 500 && brake_pressed != 0){
+     	  			if (tps_combined < 0.10f && motor_speed > 500 && !brake_pressed){
 
-    	  				torque_request = - 1;
-
-
-    	  			}
+     	  				torque_request = -10;
+     	  			}
 
 
 
