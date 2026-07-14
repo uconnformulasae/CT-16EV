@@ -1,0 +1,7 @@
+../Core/Src/main.c:131:6:HAL_CAN_RxFifo0MsgPendingCallback	16	static,ignoring_inline_asm
+../Core/Src/main.c:168:6:HAL_TIM_PeriodElapsedCallback	8	static
+../Core/Src/main.c:189:7:tmap_lut	8	static
+../Core/Src/main.c:194:5:torque_lut	16	static
+../Core/Src/main.c:598:6:SystemClock_Config	96	static,ignoring_inline_asm
+../Core/Src/main.c:212:5:main	288	static,ignoring_inline_asm
+../Core/Src/main.c:992:6:Error_Handler	0	static,ignoring_inline_asm
