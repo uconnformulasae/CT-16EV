@@ -55,6 +55,10 @@
 #define ADC_TPS2    &hadc2
 #define ADC_BPS		&hadc3
 
+
+#define MIN_REGEN_TORQUE -100
+#define MAX_REGEN_TORQUE -250
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -378,6 +382,8 @@ int main(void)
 
     	  		int32_t rtd_debounce = 0;
     	  		uint8_t rtd_raw = 0;
+    	  		uint8_t in_regen = 0;
+    	  		uint32_t regen_start_speed = 0;
     	  		while (1) {
 
     	  			HAL_ADC_Start(ADC_BPS);
@@ -410,9 +416,25 @@ int main(void)
     	  			torque_request = torque_lut(tmap_lut(tps_combined));
 
 
-     	  			if (tps_combined < 0.05f && motor_speed > 500 && !brake_pressed){
+    	  			//REGEN LOGIC :)
 
-     	  				torque_request = -400;
+
+     	  			if (tps_combined < 0.05f && motor_speed > 500 && !brake_pressed){
+     	  				if (!in_regen) {
+     	  					in_regen = 1;
+     	  					regen_start_speed = motor_speed;
+     	  				} else if (motor_speed > regen_start_speed) {
+     	  					regen_start_speed = motor_speed;
+     	  				}
+
+     	  				if (regen_start_speed > 550) {
+     	  					float ratio = (float)(motor_speed - 500) / (float)(regen_start_speed - 500);
+     	  					torque_request = MAX_REGEN_TORQUE + (int32_t)(ratio * (float)(MIN_REGEN_TORQUE - MAX_REGEN_TORQUE));
+     	  				} else {
+     	  					torque_request = MAX_REGEN_TORQUE;
+     	  				}
+     	  			} else {
+     	  				in_regen = 0;
      	  			}
 
 
