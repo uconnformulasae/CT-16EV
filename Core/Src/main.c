@@ -56,7 +56,7 @@
 #define ADC_BPS		&hadc3
 
 
-#define MIN_REGEN_TORQUE -100
+#define MIN_REGEN_TORQUE -200
 #define MAX_REGEN_TORQUE -250
 
 /* USER CODE END Includes */
@@ -116,6 +116,7 @@ uint32_t torque_limit = 2200; //x10
 uint32_t motor_speed = 0;
 volatile uint32_t current_limit = 125;
 uint32_t bus_voltage = 396;
+volatile uint8_t soc = 0;
 volatile uint8_t inverter_enabled = 0;
 volatile uint8_t inverter_lockout = 1;
 uint8_t can_ready = 0;
@@ -157,6 +158,7 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan) {
 		current_limit = (RxData[1] << 8 | RxData[0]) - 3;
 	}
 	else if (RxHeader.StdId == 0x600){
+		soc = RxData[1];
 		bus_voltage = (RxData[5] << 8 | RxData[4]);
 	}
 	// AiM EVO5 front wheel speed broadcast
@@ -419,7 +421,7 @@ int main(void)
     	  			//REGEN LOGIC :)
 
 
-     	  			if (tps_combined < 0.05f && motor_speed > 500 && !brake_pressed){
+     	  			if (tps_combined < 0.05f && motor_speed > 500 && !brake_pressed && soc <= 80){
      	  				if (!in_regen) {
      	  					in_regen = 1;
      	  					regen_start_speed = motor_speed;
