@@ -1,0 +1,6 @@
+../Core/Src/launch_control.c:90:6:lc_init	1
+../Core/Src/launch_control.c:108:6:lc_feed_wheel_speed	1
+../Core/Src/launch_control.c:117:6:lc_feed_tick	1
+../Core/Src/launch_control.c:122:19:lc_get_debug	1
+../Core/Src/launch_control.c:127:12:lc_get_state	1
+../Core/Src/launch_control.c:133:10:lc_update	28

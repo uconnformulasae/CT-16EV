@@ -23,6 +23,8 @@
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
 #include <math.h>
+#include "launch_control.h"
+
 
 //TPS1 0 Nominal 1.6564 :: 100 Nominal 2.2905
 //TPS2 0 Nominal 0.8153 :: 100 Nominal 1.4364
@@ -31,14 +33,14 @@
 // TAKE ID 0x555 byte 2 (3 for apps2) divide by 255 * 3.3 to convert to voltage
 //Change FAULT LOW and FAULT high to prevent shutoffs
 
-#define TPS1_0PER 1.4
-#define TPS1_100PER 2.3
+#define TPS1_0PER 1.38
+#define TPS1_100PER 2.34
 
 #define TPS1_FAULT_LOW 0.2
 #define TPS1_FAULT_HIGH 2.8
 
-#define TPS2_0PER 0.63
-#define TPS2_100PER 1.55
+#define TPS2_0PER 0.62
+#define TPS2_100PER 1.64
 
 #define TPS2_FAULT_LOW 0.2
 #define TPS2_FAULT_HIGH 2.8
@@ -47,11 +49,15 @@
 
 #define APPS_TRIP_PERCENT 0.4
 
-#define TPS_IIR_RATIO 0.
+#define TPS_IIR_RATIO 0.f
 
 #define ADC_TPS1	&hadc1
 #define ADC_TPS2    &hadc2
 #define ADC_BPS		&hadc3
+
+
+#define MIN_REGEN_TORQUE -200
+#define MAX_REGEN_TORQUE -250
 
 /* USER CODE END Includes */
 
@@ -102,16 +108,15 @@ static void MX_ADC3_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
-
 CAN_RxHeaderTypeDef RxHeader;
 
-volatile uint8_t RxData[8];
+uint8_t RxData[8];
 uint8_t ddb = 10;
 uint32_t torque_limit = 2200; //x10
-volatile uint32_t motor_speed = 0;
+uint32_t motor_speed = 0;
 volatile uint32_t current_limit = 125;
-volatile uint32_t bus_voltage = 396;
+uint32_t bus_voltage = 396;
+volatile uint8_t soc = 0;
 volatile uint8_t inverter_enabled = 0;
 volatile uint8_t inverter_lockout = 1;
 uint8_t can_ready = 0;
@@ -126,37 +131,14 @@ volatile uint8_t rtd_buzzer_counter = 0;
 volatile uint8_t start_disable_debounce = 1;
 volatile uint16_t disable_debounce = 999;
 
-volatile double dbg_tps1 = 0.0;
-volatile double dbg_tps2 = 0.0;
-volatile double dbg_tps_combined = 0.0;
-volatile double dbg_tps1_v = 0.0;
-volatile double dbg_tps2_v = 0.0;
-volatile double dbg_bps = 0.0;
-volatile uint32_t dbg_bps_adc = 0;
-volatile uint32_t dbg_tps1_adc = 0;
-volatile uint32_t dbg_tps2_adc = 0;
-volatile uint32_t dbg_torque_request = 0;
-volatile uint32_t dbg_torque_limit_local = 0;
-volatile uint8_t dbg_should_disable_inverter = 0;
-volatile uint8_t dbg_brake_pressed = 0;
-volatile uint8_t dbg_bse_error = 0;
-//volatile uint32_t bms_dcl_rejected_count = 0;
-//volatile uint32_t bms_dcl_accepted_count = 0;
-volatile uint32_t bms_raw_dcl = 0;
-volatile int32_t dumbass_count = 0;
 
 
 void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan) {
-	RxHeader.StdId = 0;
-	if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &RxHeader, (uint8_t *)RxData) != HAL_OK) {
+	if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &RxHeader, RxData) != HAL_OK) {
 
 		Error_Handler();
 	}
-	//Still a band aid fix.
-	if(RxHeader.IDE != CAN_ID_STD){
-		dumbass_count++;
-		return;
-	}
+
 	if (RxHeader.StdId == 0x0B1) {
 		//torque_limit = RxData[1] << 8 | RxData[0];
 	}
@@ -173,20 +155,18 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan) {
 		motor_speed = RxData[3] << 8 | RxData[2];
 	}
 	else if (RxHeader.StdId == 0x202){
-	    current_limit = (RxData[1] << 8) | RxData[0];
-//	    bms_raw_dcl = raw_dcl;
-//	    if (raw_dcl <= 126) {
-//	        current_limit = raw_dcl;
-//	        bms_dcl_accepted_count++;
-//	    }
-//	    else {
-//
-//	    	bms_dcl_rejected_count++;
-//	    }
+		current_limit = (RxData[1] << 8 | RxData[0]) - 3;
 	}
 	else if (RxHeader.StdId == 0x600){
-			bus_voltage = (RxData[5] << 8 | RxData[4]);
-		}
+		soc = RxData[1];
+		bus_voltage = (RxData[5] << 8 | RxData[4]);
+	}
+	// AiM EVO5 front wheel speed broadcast
+	else if (RxHeader.StdId == LC_AIM_WHEEL_SPEED_CAN_ID){
+		uint16_t fl_speed = RxData[1] << 8 | RxData[0]; // Front left  km/h x10, little endian
+		uint16_t fr_speed = RxData[3] << 8 | RxData[2]; // Front right km/h x10, little endian
+		lc_feed_wheel_speed(fl_speed, fr_speed);
+	}
 
 
 }
@@ -212,23 +192,20 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 	}
 }
 
-double tmap_lut(double tps) {
-	double V_MIN = 0.1;
-	double V_MAX = 0.9;
-	double tps_local = (fmax(V_MIN, fmin(tps, V_MAX)) - V_MIN) * (1 / (V_MAX - V_MIN));
+float tmap_lut(float tps) {
+	float tps_local = (fmaxf(0.1f, fminf(tps, 0.9f)) - 0.1f) * (1.0f / 0.8f);
 	return tps_local;
 }
 
-int torque_lut(double tps) {
+int torque_lut(float tps) {
 	uint32_t torque_limit_local = torque_limit;
-	torque_limit_local = fmin(torque_limit, (double) (4200 * current_limit) * 1.0 / fmax(230.4, (double) motor_speed * 0.1076));
+	torque_limit_local = fminf(torque_limit, (float)(4200 * current_limit) / fmaxf(230.4f, (float)motor_speed * 0.1076f));
 	//if(motor_speed < 150){
-		//torque_limit_local = fmin(torque_limit_local, 900);
+		//torque_limit_local = fminf(torque_limit_local, 900);
 	//}
 	if(motor_speed >= 6000){
 		torque_limit_local = 300;
 	}
-	dbg_torque_limit_local = torque_limit_local;
 	return tps * torque_limit_local;
 }
 
@@ -337,6 +314,18 @@ int main(void)
     	canfilterconfig.FilterScale = CAN_FILTERSCALE_32BIT;
     	HAL_CAN_ConfigFilter(&hcan, &canfilterconfig);
 
+    	/* CAN filter for AiM front wheel speed */
+    	canfilterconfig.FilterActivation = CAN_FILTER_ENABLE;
+    	canfilterconfig.FilterBank = 6;
+    	canfilterconfig.FilterFIFOAssignment = CAN_RX_FIFO0;
+    	canfilterconfig.FilterIdHigh = LC_AIM_WHEEL_SPEED_CAN_ID << 5;
+    	canfilterconfig.FilterIdLow = 0;
+    	canfilterconfig.FilterMaskIdHigh = LC_AIM_WHEEL_SPEED_CAN_ID << 5;
+    	canfilterconfig.FilterMaskIdLow = 0x0000;
+    	canfilterconfig.FilterMode = CAN_FILTERMODE_IDMASK;
+    	canfilterconfig.FilterScale = CAN_FILTERSCALE_32BIT;
+    	HAL_CAN_ConfigFilter(&hcan, &canfilterconfig);
+
     	HAL_CAN_Start(&hcan);
 
     	if (HAL_CAN_ActivateNotification(&hcan, CAN_IT_RX_FIFO0_MSG_PENDING)
@@ -344,6 +333,8 @@ int main(void)
     		Error_Handler();
     	}
 
+    	// Initialize launch control system
+    	lc_init();
 
   /* USER CODE END 2 */
 
@@ -364,11 +355,19 @@ int main(void)
     	  		rtdHeader.RTR = CAN_RTR_DATA;
     	  		rtdHeader.DLC = 1;
 
-    	  		double tps1 = 0;
-    	  		double tps2 = 0;
-    	  		double tps_combined = 0;
-    	  		double bps = 0;
-    	  		uint32_t torque_request = 0;
+    	  		/* Launch control debug CAN header */
+    	  		CAN_TxHeaderTypeDef lcDebugHeader;
+    	  		lcDebugHeader.IDE = CAN_ID_STD;
+    	  		lcDebugHeader.StdId = LC_DEBUG_CAN_ID;
+    	  		lcDebugHeader.RTR = CAN_RTR_DATA;
+    	  		lcDebugHeader.DLC = 8;
+
+
+    	  		float tps1 = 0;
+    	  		float tps2 = 0;
+    	  		float tps_combined = 0;
+    	  		float bps = 0;
+    	  		int32_t torque_request = 0;
     	  		uint8_t heartbeat_counter = 0;
     	  		uint32_t tps1_adc = 0;
     	  		uint32_t tps2_adc = 0;
@@ -380,46 +379,81 @@ int main(void)
     	  		HAL_TIM_Base_Start_IT(&htim2);
     	  		HAL_TIM_Base_Start_IT(&htim3);
 
-    	  		double tps1_avg = 0;
-    	  		double tps2_avg = 0;
+    	  		float tps1_avg = 0;
+    	  		float tps2_avg = 0;
 
     	  		int32_t rtd_debounce = 0;
     	  		uint8_t rtd_raw = 0;
+    	  		uint8_t in_regen = 0;
+    	  		uint32_t regen_start_speed = 0;
     	  		while (1) {
 
     	  			HAL_ADC_Start(ADC_BPS);
     	  			HAL_ADC_Start(ADC_TPS1);
     	  			HAL_ADC_Start(ADC_TPS2);
 
-    	  			HAL_CAN_AbortTxRequest(&hcan, CAN_TX_MAILBOX0 | CAN_TX_MAILBOX1 | CAN_TX_MAILBOX2);
+    	  			//HAL_CAN_AbortTxRequest(&hcan, CAN_TX_MAILBOX0 | CAN_TX_MAILBOX1 | CAN_TX_MAILBOX2);
 
     	  			// Throttle Position Potentiometer 1 Acquire and Calculate
     	  			HAL_ADC_PollForConversion(ADC_TPS1, HAL_MAX_DELAY);
     	  			tps1_adc = HAL_ADC_GetValue(ADC_TPS1);
-    	  			double tps1_v = ((double) tps1_adc) / 4095 * 3.3;
+    	  			float tps1_v = (float)tps1_adc * (3.3f / 4095.0f);
     	  			tps1 = (tps1_v - TPS1_0PER) / (TPS1_100PER - TPS1_0PER); // Percentage
-    	  			tps1 = fmax(tps1, 0);
-    	  			tps1_avg = (tps1_avg == 0) ? tps1 : tps1_avg * TPS_IIR_RATIO + tps1 * (1 - TPS_IIR_RATIO);
+    	  			tps1 = fmaxf(tps1, 0);
+    	  			tps1_avg = (tps1_avg == 0) ? tps1 : tps1_avg * TPS_IIR_RATIO + tps1 * (1.0f - TPS_IIR_RATIO);
     	  			tps1 = tps1_avg;
 
 
     	  			// Throttle Position Potentiometer 2 Acquire and Calculate
     	  			HAL_ADC_PollForConversion(ADC_TPS2, HAL_MAX_DELAY);
     	  			tps2_adc = HAL_ADC_GetValue(ADC_TPS2);
-    	  			double tps2_v = ((double) tps2_adc) / 4095 * 3.3;
+    	  			float tps2_v = (float)tps2_adc * (3.3f / 4095.0f);
     	  			tps2 = (tps2_v - TPS2_0PER) / (TPS2_100PER - TPS2_0PER); // Percentage
-    	  			tps2 = fmax(tps2, 0);
-    	  			tps2_avg = (tps2_avg == 0) ? tps2 : tps2_avg * TPS_IIR_RATIO + tps2 * (1 - TPS_IIR_RATIO);
+    	  			tps2 = fmaxf(tps2, 0);
+    	  			tps2_avg = (tps2_avg == 0) ? tps2 : tps2_avg * TPS_IIR_RATIO + tps2 * (1.0f - TPS_IIR_RATIO);
     	  			tps2 = tps2_avg;
 
     	  			// TPS and Torque request calculate
     	  			tps_combined = (tps1 + tps2) / 2;
     	  			torque_request = torque_lut(tmap_lut(tps_combined));
 
+
+    	  			//REGEN LOGIC :)
+
+
+     	  			if (tps_combined < 0.05f && motor_speed > 500 && !brake_pressed && soc <= 80){
+     	  				if (!in_regen) {
+     	  					in_regen = 1;
+     	  					regen_start_speed = motor_speed;
+     	  				} else if (motor_speed > regen_start_speed) {
+     	  					regen_start_speed = motor_speed;
+     	  				}
+
+     	  				if (regen_start_speed > 550) {
+     	  					float ratio = (float)(motor_speed - 500) / (float)(regen_start_speed - 500);
+     	  					torque_request = MAX_REGEN_TORQUE + (int32_t)(ratio * (float)(MIN_REGEN_TORQUE - MAX_REGEN_TORQUE));
+     	  				} else {
+     	  					torque_request = MAX_REGEN_TORQUE;
+     	  				}
+     	  			} else {
+     	  				in_regen = 0;
+     	  			}
+
+
+
+
+    	  			// Launch control: only active when enabled
+    	  			if (launch_control_enable) {
+    	  				lc_feed_tick(HAL_GetTick());
+    	  				torque_request = lc_update(torque_request, motor_speed, tps_combined);
+    	  			} else {
+    	  				lc_init(); // Reset state machine when disabled
+    	  			}
+
     	  			// Brake Pressure Acquire and Calculate
     	  			HAL_ADC_PollForConversion(ADC_BPS, HAL_MAX_DELAY);
     	  			bps_adc = HAL_ADC_GetValue(ADC_BPS);
-    	  			bps = ((double) bps_adc) / 4095 * 5;
+    	  			bps = (float)bps_adc * (5.0f / 4095.0f);
     	  			brake_pressed = bps > BPS_Setpoint;
 
     	  			// Ready to Drive button poll
@@ -433,7 +467,7 @@ int main(void)
 						rtd_debounce -= 4;
 					}
 
-    	  			rtd_debounce = fmin(fmax(rtd_debounce, 0), 100);
+    	  			rtd_debounce = fminf(fmaxf(rtd_debounce, 0), 100);
 
     	  			if (rtd_debounce > 50){
     	  				ready_to_drive = 1;
@@ -441,7 +475,7 @@ int main(void)
 
     	 		///////////////////UN COMMENT THIS PLZ///////////////////
 
-    	  		//	ready_to_drive &= rtd_timeout < 20;
+    	  			ready_to_drive &= rtd_timeout < 20;
 
     	  		//////////////////////////////////////////////////////////
     	  			// Ready to Drive dashboard light
@@ -463,15 +497,15 @@ int main(void)
     	  			// Error States
 					tps1_oor = tps1_v < TPS1_FAULT_LOW || tps1_v > TPS1_FAULT_HIGH;
 					tps2_oor = tps2_v < TPS2_FAULT_LOW || tps2_v > TPS2_FAULT_HIGH;
-					tps1 = fmin(tps1, 100);
-					tps2 = fmin(tps2, 100);
-    	  			tps_dist_error = fabs(tps1 - tps2) > APPS_TRIP_PERCENT;
+					tps1 = fminf(tps1, 100.0f);
+					tps2 = fminf(tps2, 100.0f);
+    	  			tps_dist_error = fabsf(tps1 - tps2) > APPS_TRIP_PERCENT;
 
     	  			if(!bse_error){
-    	  				bse_error = brake_pressed && tps_combined >= 0.1;
+    	  				bse_error = brake_pressed && tps_combined >= 0.1f;
     	  			}
     	  			else{
-    	  				bse_error = tps_combined >= 0.05;
+    	  				bse_error = tps_combined >= 0.05f;
     	  			}
 
     	  			// Disable Inverter if any errors present
@@ -481,21 +515,6 @@ int main(void)
     	  			if (should_disable_inverter) {
     	  				torque_request = 0;
     	  			}
-
-    	  			// CUBEMON
-    	  			dbg_tps1 = tps1;
-    	  			dbg_tps2 = tps2;
-    	  			dbg_tps_combined = tps_combined;
-    	  			dbg_tps1_v = tps1_v;
-    	  			dbg_tps2_v = tps2_v;
-    	  			dbg_bps = bps;
-    	  			dbg_bps_adc = bps_adc;
-    	  			dbg_tps1_adc = tps1_adc;
-    	  			dbg_tps2_adc = tps2_adc;
-    	  			dbg_torque_request = torque_request;
-    	  			dbg_should_disable_inverter = should_disable_inverter;
-    	  			dbg_brake_pressed = brake_pressed;
-    	  			dbg_bse_error = bse_error;
 
     	  			if (can_ready) {	// Every ~10 (?) ms
     	  				if (inverter_lockout == 1) {
@@ -546,11 +565,33 @@ int main(void)
     	  				TxData[5] = (int) (tps1 * 100) & 0xff;
     	  				TxData[6] = (int) (tps2 * 100) & 0xff;
     	  				TxData[7] = (int) (tmap_lut(tps_combined) * 100) & 0xFF;
+	  					uint8_t lcData[8] = {7, 7, 49, 7, 7, 49, 7, 7};
+
+	  					const lc_debug_t *lc = lc_get_debug();
+
+						lcData[0] = (uint8_t)lc->state;                              // LC state (0-3)
+						lcData[1] = (uint8_t)(lc->slip_ratio * 200.0f);              // Slip ratio × 200 (0-200 → 0-100%)
+						lcData[2] = (uint8_t)fminf(fabsf(lc->slip_rate) * 50.0f, 255.0f);  // |Slip rate| × 50
+						lcData[3] = (lc->lc_torque >> 0) & 0xFF;                     // LC torque lo
+						lcData[4] = (lc->lc_torque >> 8) & 0xFF;                     // LC torque hi
+						lcData[5] = (uint8_t)17.38f;
+						//lcData[5] = (uint8_t)(fminf(fmaxf(lc->pi_output, -127.0f), 127.0f) + 128.0f); // PI output, signed→unsigned
+						//0x05 = 0b0000 1001
+						lcData[6] = (lc->sensor_healthy << 0) | (lc->slip_rate_cut << 1) | (launch_control_enable << 2) | ((lc->state & 0x03) << 3);
+						lcData[7] = (uint8_t)(lc->vehicle_speed * 10.0f);            // Vehicle speed m/s × 10
+
+
 
     	  				if (HAL_CAN_AddTxMessage(&hcan, &debugHeader, TxData, &TxMailbox)
     	  						!= HAL_OK) {
     	  					Error_Handler();
     	  				}
+
+
+//    	  				if (HAL_CAN_AddTxMessage(&hcan, &lcDebugHeader, lcData, &TxMailbox) != HAL_OK){
+//    	  				    	  						Error_Handler();
+//						}
+
     	  				TxData[0] = (ready_to_drive) & 0x01;
 
     	  				if (HAL_CAN_AddTxMessage(&hcan, &rtdHeader, TxData, &TxMailbox)
@@ -559,12 +600,18 @@ int main(void)
     	  				}
 
     	  				uint32_t timeout_start = HAL_GetTick();
-    	  				while(HAL_CAN_GetTxMailboxesFreeLevel(&hcan) <= 1){
+    	  				while(HAL_CAN_GetTxMailboxesFreeLevel(&hcan) == 0){
     	  					uint32_t t = HAL_GetTick();
     	  					if(t < timeout_start || (t - timeout_start) > 15){
     	  						break;
     	  					}
     	  				}
+
+    	  				// Launch control debug telemetry
+
+    	  					//lcDebugHeader.ExtId = 0;
+    	  					//lcDebugHeader.TransmitGlobalTime = 0;
+
 
 
 
